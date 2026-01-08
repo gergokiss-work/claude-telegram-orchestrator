@@ -1,0 +1,53 @@
+#!/bin/bash
+# tg - Terminal helper for Claude Telegram Orchestrator
+
+SCRIPT_DIR="$HOME/.claude/telegram-orchestrator"
+
+case "$1" in
+    status)
+        for f in "$SCRIPT_DIR/sessions"/claude-*; do
+            [[ -f "$f" && "$f" != *.pid ]] || continue
+            s=$(basename "$f")
+            tmux has-session -t "$s" 2>/dev/null && echo "🟢 $s" || echo "🔴 $s (dead)"
+        done
+        ;;
+    new)
+        shift
+        "$SCRIPT_DIR/start-claude.sh" "$*"
+        ;;
+    kill)
+        tmux kill-session -t "claude-$2" 2>/dev/null
+        rm -f "$SCRIPT_DIR/sessions/claude-$2"*
+        echo "Killed claude-$2"
+        ;;
+    attach)
+        tmux attach -t "claude-$2"
+        ;;
+    logs)
+        tail -f "$SCRIPT_DIR/logs/orchestrator.log"
+        ;;
+    start)
+        launchctl load ~/Library/LaunchAgents/com.claude.telegram-orchestrator.plist 2>/dev/null
+        echo "Started"
+        ;;
+    stop)
+        launchctl unload ~/Library/LaunchAgents/com.claude.telegram-orchestrator.plist 2>/dev/null
+        echo "Stopped"
+        ;;
+    *)
+        if [[ "$1" =~ ^[0-9]+$ ]]; then
+            shift
+            tmux send-keys -t "claude-$1" "$*"
+            tmux send-keys -t "claude-$1" -H 0d
+        else
+            echo "Usage: tg <command>"
+            echo "  status      List sessions"
+            echo "  new [task]  Start new session"
+            echo "  kill <n>    Kill session n"
+            echo "  attach <n>  Attach to session n"
+            echo "  logs        View orchestrator logs"
+            echo "  start/stop  Control daemon"
+            echo "  <n> <msg>   Send message to session n"
+        fi
+        ;;
+esac

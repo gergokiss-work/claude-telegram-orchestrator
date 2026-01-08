@@ -1,0 +1,201 @@
+#!/bin/bash
+# orchestrator.sh - Main daemon that polls Telegram for commands
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/config.env"
+
+LOG_FILE="$SCRIPT_DIR/logs/orchestrator.log"
+LAST_UPDATE_ID=0
+SESSIONS_DIR="$SCRIPT_DIR/sessions"
+
+mkdir -p "$SCRIPT_DIR/logs" "$SESSIONS_DIR"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+}
+
+get_status() {
+    local status=""
+    for session_file in "$SESSIONS_DIR"/claude-*; do
+        [[ -f "$session_file" ]] || continue
+        [[ "$session_file" == *.pid ]] && continue
+
+        session_name=$(basename "$session_file")
+        if tmux has-session -t "$session_name" 2>/dev/null; then
+            last_output=$(tmux capture-pane -t "$session_name" -p -S -5 2>/dev/null | grep -v '^$' | tail -3)
+            status+="🟢 $session_name: active
+$last_output
+
+"
+        else
+            status+="🔴 $session_name: stopped
+"
+            rm -f "$session_file" "$session_file.monitor.pid"
+        fi
+    done
+
+    if [[ -z "$status" ]]; then
+        status="No active sessions. Use /new to start one."
+    fi
+
+    echo "$status"
+}
+
+select_option() {
+    local session="$1"
+    local option_num="$2"
+
+    if ! tmux has-session -t "$session" 2>/dev/null; then
+        log "Session $session not found"
+        "$SCRIPT_DIR/notify.sh" "error" "$session" "Session not found"
+        return 1
+    fi
+
+    local moves=$((option_num - 1))
+    for ((i=0; i<moves; i++)); do
+        tmux send-keys -t "$session" Down
+        sleep 0.1
+    done
+
+    sleep 0.2
+    tmux send-keys -t "$session" -H 0d
+    log "Selected option $option_num in $session"
+}
+
+inject_input() {
+    local session="$1"
+    local input="$2"
+
+    if ! tmux has-session -t "$session" 2>/dev/null; then
+        log "Session $session not found"
+        "$SCRIPT_DIR/notify.sh" "error" "$session" "Session not found"
+        return 1
+    fi
+
+    tmux send-keys -t "$session" "$input"
+    tmux send-keys -t "$session" -H 0d
+    log "Injected to $session: $input"
+}
+
+kill_session() {
+    local session="$1"
+
+    if tmux has-session -t "$session" 2>/dev/null; then
+        tmux send-keys -t "$session" "/exit"
+        tmux send-keys -t "$session" -H 0d
+        sleep 2
+        tmux kill-session -t "$session" 2>/dev/null || true
+        log "Killed session $session"
+        "$SCRIPT_DIR/notify.sh" "complete" "$session" "Session killed by user"
+    fi
+
+    rm -f "$SESSIONS_DIR/$session" "$SESSIONS_DIR/$session.monitor.pid"
+}
+
+process_message() {
+    local message="$1"
+    local chat_id="$2"
+
+    if [[ -z "$TELEGRAM_CHAT_ID" ]]; then
+        sed -i '' "s/TELEGRAM_CHAT_ID=\"\"/TELEGRAM_CHAT_ID=\"$chat_id\"/" "$SCRIPT_DIR/config.env"
+        source "$SCRIPT_DIR/config.env"
+        log "Auto-configured chat ID: $chat_id"
+    fi
+
+    if [[ "$message" == /status* ]]; then
+        status=$(get_status)
+        "$SCRIPT_DIR/notify.sh" "update" "status" "$status"
+
+    elif [[ "$message" == /new* ]]; then
+        initial_prompt="${message#/new}"
+        initial_prompt="${initial_prompt# }"
+        "$SCRIPT_DIR/start-claude.sh" "$initial_prompt"
+
+    elif [[ "$message" == /tts* ]]; then
+        if [[ -f "$HOME/.claude/tts/enabled" ]]; then
+            rm -f "$HOME/.claude/tts/enabled"
+            "$SCRIPT_DIR/notify.sh" "update" "system" "TTS disabled"
+        else
+            mkdir -p "$HOME/.claude/tts"
+            touch "$HOME/.claude/tts/enabled"
+            "$SCRIPT_DIR/notify.sh" "update" "system" "TTS enabled"
+        fi
+
+    elif [[ "$message" == /kill* ]]; then
+        session_num="${message#/kill}"
+        session_num="${session_num# }"
+        if [[ -n "$session_num" ]]; then
+            kill_session "claude-$session_num"
+        else
+            "$SCRIPT_DIR/notify.sh" "error" "system" "Usage: /kill <number>"
+        fi
+
+    elif [[ "$message" =~ ^/([0-9]+)[[:space:]]+(select|pick|choose|opt)[[:space:]]+([0-9]+) ]]; then
+        session_num="${BASH_REMATCH[1]}"
+        option_num="${BASH_REMATCH[3]}"
+        select_option "claude-$session_num" "$option_num"
+
+    elif [[ "$message" =~ ^/([0-9]+)(.*) ]]; then
+        session_num="${BASH_REMATCH[1]}"
+        input="${BASH_REMATCH[2]}"
+        input="${input# }"
+
+        if [[ "$input" =~ ^[0-9]+$ ]]; then
+            select_option "claude-$session_num" "$input"
+        else
+            inject_input "claude-$session_num" "$input"
+        fi
+
+    else
+        latest_session=$(ls -t "$SESSIONS_DIR"/claude-* 2>/dev/null | grep -v '.pid' | head -1 | xargs basename 2>/dev/null || echo "")
+        if [[ -n "$latest_session" ]] && tmux has-session -t "$latest_session" 2>/dev/null; then
+            inject_input "$latest_session" "$message"
+        else
+            "$SCRIPT_DIR/notify.sh" "error" "system" "No active session. Use /new to start one."
+        fi
+    fi
+}
+
+# Main loop
+log "Orchestrator starting..."
+log "Polling Telegram every ${POLL_INTERVAL}s"
+
+while true; do
+    response=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=$((LAST_UPDATE_ID + 1))&timeout=30" 2>/dev/null || echo '{"ok":false}')
+
+    if [[ $(echo "$response" | jq -r '.ok') == "true" ]]; then
+        updates=$(echo "$response" | jq -c '.result[]' 2>/dev/null || echo "")
+
+        while IFS= read -r update; do
+            [[ -z "$update" ]] && continue
+
+            update_id=$(echo "$update" | jq -r '.update_id')
+            message_text=$(echo "$update" | jq -r '.message.text // empty')
+            chat_id=$(echo "$update" | jq -r '.message.chat.id // empty')
+            reply_to_text=$(echo "$update" | jq -r '.message.reply_to_message.text // empty')
+
+            if [[ -n "$message_text" && -n "$chat_id" ]]; then
+                if [[ -n "$reply_to_text" ]]; then
+                    if [[ "$reply_to_text" =~ \[claude-([0-9]+)\] ]]; then
+                        session_num="${BASH_REMATCH[1]}"
+                        log "Reply detected for claude-$session_num: $message_text"
+                        inject_input "claude-$session_num" "$message_text"
+                        LAST_UPDATE_ID=$update_id
+                        continue
+                    fi
+                fi
+
+                log "Received: $message_text from $chat_id"
+                process_message "$message_text" "$chat_id"
+            fi
+
+            LAST_UPDATE_ID=$update_id
+        done <<< "$updates"
+    else
+        log "Telegram API error, retrying..."
+    fi
+
+    sleep "$POLL_INTERVAL"
+done
