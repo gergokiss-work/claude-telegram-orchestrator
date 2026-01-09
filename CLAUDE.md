@@ -61,14 +61,57 @@ tmux sessions: claude-0, claude-1, claude-2...
 The always-running default instance that:
 - Receives all Telegram messages not routed to specific sessions
 - Can spawn/manage other sessions
-- Handles `/status`, `/new`, `/kill` commands
-- Routes messages based on reply-to
+- Delegates tasks to worker sessions (claude-1, claude-2, etc.)
+- Monitors session status and reports back
 
 ### Starting claude-0
 
 ```bash
 ~/.claude/telegram-orchestrator/start-claude.sh --coordinator
 ```
+
+### Injecting Tasks to Other Sessions
+
+When user asks to send a task to another session (e.g., "tell claude-2 to..."):
+
+```bash
+# Clear any leftover input first
+tmux send-keys -t claude-2 C-u
+
+# Inject the prompt
+INPUT="Your task here
+<tg>send-summary.sh</tg>"
+
+tmpfile=$(mktemp)
+printf '%s' "$INPUT" > "$tmpfile"
+tmux load-buffer -b tg_msg "$tmpfile"
+tmux paste-buffer -b tg_msg -t claude-2
+tmux delete-buffer -b tg_msg 2>/dev/null
+rm -f "$tmpfile"
+
+# Send Enter to submit
+sleep 0.5
+tmux send-keys -t claude-2 Enter
+```
+
+### Resuming Past Sessions
+
+Use `find-session.sh` to search by keyword, then start with `--resume`:
+
+```bash
+# Find session about "n8n"
+SESSION_ID=$(~/.claude/telegram-orchestrator/find-session.sh "n8n")
+
+# Resume it
+~/.claude/telegram-orchestrator/start-claude.sh --resume "$SESSION_ID" --query "n8n"
+```
+
+### Coordinator Responsibilities
+
+1. **Route messages** - Send tasks to appropriate worker sessions
+2. **Monitor status** - Check on sessions via tmux capture-pane
+3. **Report back** - Always send summaries via send-summary.sh
+4. **Delegate** - Don't do everything yourself, spawn/use worker sessions
 
 ## Message Flow
 
@@ -82,6 +125,34 @@ The always-running default instance that:
 1. Claude sees `<tg>send-summary.sh</tg>` tag
 2. Runs `send-summary.sh` with formatted response
 3. You receive reply in Telegram
+
+## Responding to Telegram Messages
+
+When you see `<tg>send-summary.sh</tg>` at the end of a message, you MUST:
+
+1. **Read the format template first:** `~/.claude/telegram-orchestrator/TELEGRAM_FORMAT.md`
+2. **Send a formatted summary** using that template structure
+
+```bash
+~/.claude/telegram-orchestrator/send-summary.sh "YOUR_FORMATTED_MESSAGE"
+```
+
+**Quick Format Reference:**
+```
+{STATUS_EMOJI} <b>{Title}</b>
+
+🎯 <b>Request:</b> What was asked
+📋 <b>Result:</b>
+• Key points as bullets
+💡 <i>Notes or next steps</i>
+```
+
+**Status Emojis:** ✅ Done | ⏳ Working | ❌ Failed | 💡 Info | ⚠️ Warning
+
+**Rules:**
+- User can't see the Mac screen - provide full context
+- Include: what was asked, what was done, results, any blockers
+- Keep readable but complete - use bullets for scannability
 
 ## Auto-Start on Boot
 
