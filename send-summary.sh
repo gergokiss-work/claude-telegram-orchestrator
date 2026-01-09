@@ -3,6 +3,7 @@
 # Usage: send-summary.sh "Your summary message here"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SESSIONS_DIR="$SCRIPT_DIR/sessions"
 
 [[ -f "$SCRIPT_DIR/.env.local" ]] && source "$SCRIPT_DIR/.env.local"
 [[ -f "$SCRIPT_DIR/config.env" ]] && source "$SCRIPT_DIR/config.env"
@@ -10,10 +11,45 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MESSAGE="$1"
 [[ -z "$MESSAGE" ]] && exit 0
 
-# Get session name from tmux if running inside one
-SESSION="claude"
+mkdir -p "$SESSIONS_DIR"
+
+# Determine session name
 if [[ -n "$TMUX" ]]; then
+    # Running in tmux - use tmux session name
     SESSION=$(tmux display-message -p '#S' 2>/dev/null || echo "claude")
+else
+    # Running outside tmux (e.g., Cursor terminal)
+    # Use a persistent ID based on this terminal session
+
+    # Get TTY as identifier (or PID if no TTY)
+    TTY_ID=$(tty 2>/dev/null | sed 's|/dev/||; s|/|-|g' || echo "pid-$$")
+
+    # Check if we already have an ID for this TTY
+    CURSOR_ID_FILE="$SESSIONS_DIR/.claude-cursor-tty-map"
+    touch "$CURSOR_ID_FILE"
+
+    # Look up existing ID for this TTY
+    EXISTING_ID=$(grep "^$TTY_ID:" "$CURSOR_ID_FILE" 2>/dev/null | cut -d: -f2)
+
+    if [[ -n "$EXISTING_ID" ]]; then
+        SESSION="$EXISTING_ID"
+    else
+        # Find next available cursor number
+        NEXT_NUM=1
+        while [[ -f "$SESSIONS_DIR/claude-cursor-$NEXT_NUM" ]] || grep -q ":claude-cursor-$NEXT_NUM$" "$CURSOR_ID_FILE" 2>/dev/null; do
+            NEXT_NUM=$((NEXT_NUM + 1))
+        done
+
+        SESSION="claude-cursor-$NEXT_NUM"
+
+        # Register this TTY with the new ID
+        echo "$TTY_ID:$SESSION" >> "$CURSOR_ID_FILE"
+    fi
+
+    # Create/update session file with TTY info for potential reply routing
+    echo "tty=$TTY_ID" > "$SESSIONS_DIR/$SESSION"
+    echo "pid=$$" >> "$SESSIONS_DIR/$SESSION"
+    echo "started=$(date -Iseconds)" >> "$SESSIONS_DIR/$SESSION"
 fi
 
 FORMATTED="📝 <b>[$SESSION]</b>

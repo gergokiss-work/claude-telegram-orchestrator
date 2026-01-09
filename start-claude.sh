@@ -56,23 +56,4 @@ EOF
 "$SCRIPT_DIR/notify.sh" "new" "$SESSION_NAME" "Started in $WORKING_DIR
 Use: tmux attach -t $SESSION_NAME"
 
-# Try to open in Cursor (macOS)
-if [[ "$(uname)" == "Darwin" ]]; then
-    osascript << EOF &
-tell application "Cursor"
-    activate
-    delay 0.5
-end tell
-tell application "System Events"
-    tell process "Cursor"
-        keystroke "\`" using {control down}
-        delay 0.5
-        keystroke "tmux attach -t $SESSION_NAME"
-        delay 0.2
-        key code 36
-    end tell
-end tell
-EOF
-fi
-
 echo "Started $SESSION_NAME"
