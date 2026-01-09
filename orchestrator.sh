@@ -42,10 +42,21 @@ get_status() {
                 state_icon="💬"  # waiting for input
             fi
 
+            # Special icon for coordinator
+            if [[ "$session_name" == "claude-0" ]]; then
+                state_icon="🎯"  # coordinator
+            fi
+
             # Get a clean preview (last meaningful line)
             local preview=$(echo "$last_output" | grep -v "^─\|bypass\|shift+tab" | tail -1 | cut -c1-60)
 
-            status_msg+="$state_icon <b>$session_name</b> (tmux)
+            # Label coordinator
+            local label="(tmux)"
+            if [[ "$session_name" == "claude-0" ]]; then
+                label="(coordinator)"
+            fi
+
+            status_msg+="$state_icon <b>$session_name</b> $label
 <code>$preview</code>
 
 "
@@ -244,16 +255,21 @@ Example: /resume the auth bug fix"
         fi
 
     else
-        # Use target_session if provided (from reply routing), otherwise find latest
+        # Use target_session if provided (from reply routing), otherwise use coordinator
         local session_to_use="$target_session"
         if [[ -z "$session_to_use" ]]; then
-            # Find most recent tmux session
-            session_to_use=$(ls -t "$SESSIONS_DIR"/claude-[0-9]* 2>/dev/null | grep -v '.pid' | head -1 | xargs basename 2>/dev/null || echo "")
+            # Default to coordinator (claude-0)
+            session_to_use="claude-0"
+
+            # Ensure coordinator is running
+            if ! tmux has-session -t "claude-0" 2>/dev/null; then
+                log "Coordinator not running, starting..."
+                "$SCRIPT_DIR/start-claude.sh" --coordinator
+                sleep 3
+            fi
         fi
 
-        if [[ -z "$session_to_use" ]]; then
-            "$SCRIPT_DIR/notify.sh" "error" "system" "No active session. Use /new to start one."
-        elif [[ "$session_to_use" == claude-cursor-* ]]; then
+        if [[ "$session_to_use" == claude-cursor-* ]]; then
             # Cursor session - inject_input handles the queue
             inject_input "$session_to_use" "$message" "true"
         elif tmux has-session -t "$session_to_use" 2>/dev/null; then
@@ -265,9 +281,21 @@ Example: /resume the auth bug fix"
     fi
 }
 
+# Ensure coordinator (claude-0) is running
+ensure_coordinator() {
+    if ! tmux has-session -t "claude-0" 2>/dev/null; then
+        log "Starting coordinator claude-0..."
+        "$SCRIPT_DIR/start-claude.sh" --coordinator
+        sleep 3  # Give it time to start
+    fi
+}
+
 # Main loop
 log "Orchestrator starting..."
 log "Polling Telegram every ${POLL_INTERVAL}s"
+
+# Start coordinator on boot
+ensure_coordinator
 
 while true; do
     response=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=$((LAST_UPDATE_ID + 1))&timeout=30" 2>/dev/null || echo '{"ok":false}')

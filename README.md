@@ -9,18 +9,33 @@ Phone (Telegram)                    Mac
      │                               │
      │  "fix the auth bug"           │
      ├──────────────────────────────>│ orchestrator.sh receives
-     │                               │ injects to Claude session
+     │                               │ routes to claude-0 (coordinator)
      │                               │
-     │                               │ Claude works...
+     │                               │ claude-0 handles or spawns worker
      │                               │ Claude calls send-summary.sh
      │                               │
-     │  [claude-1] Fixed auth bug    │
+     │  [claude-0] Starting worker   │
      │<──────────────────────────────┤
-     │  in login.ts:45...            │
+     │  for auth bug fix...          │
      │                               │
-     │  (reply to continue)          │
+     │  (reply to [claude-X] to      │
+     │   talk to that session)       │
      └───────────────────────────────┘
 ```
+
+## Architecture
+
+```
+claude-0 (coordinator) ← Always running, receives non-reply messages
+    │
+    ├── claude-1 (work session) ← Reply to [claude-1] messages
+    ├── claude-2 (work session) ← Reply to [claude-2] messages
+    └── claude-3 (work session) ← Reply to [claude-3] messages
+```
+
+- **claude-0**: Persistent coordinator, handles general requests, can spawn workers
+- **claude-1, 2, 3...**: Work sessions for specific tasks, spawned on demand
+- **Reply routing**: Reply to any `[claude-X]` message to talk to that specific session
 
 ## Features
 
@@ -163,6 +178,7 @@ The system searches your Claude history (`~/.claude/history.jsonl`) and uses AI 
 ├── notify.sh            # System notifications (errors, status)
 ├── start-claude.sh      # Creates new Claude tmux sessions
 ├── find-session.sh      # Finds sessions by natural language query
+├── coordinator-claude.md # Special instructions for claude-0 coordinator
 ├── config.env           # Settings (poll interval, max sessions)
 ├── .env.local           # Secrets (bot token, API keys) - gitignored
 ├── enabled              # Touch to enable, rm to disable
