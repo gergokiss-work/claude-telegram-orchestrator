@@ -58,11 +58,10 @@ inject_input() {
         return 1
     fi
 
-    # Append summary instruction for Telegram messages
+    # Append summary instruction for Telegram messages (subtle, at end)
     if [[ "$from_telegram" == "true" ]]; then
         input="$input
-
-[TELEGRAM] When done, send summary: ~/.claude/telegram-orchestrator/send-summary.sh \"your summary here\""
+<tg>send-summary.sh</tg>"
     fi
 
     # Use temp file + load-buffer for reliable long message injection

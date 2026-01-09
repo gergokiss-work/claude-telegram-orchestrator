@@ -1,218 +1,226 @@
 # Claude Telegram Orchestrator
 
-Control multiple Claude Code terminal sessions from your phone via Telegram.
-
-```
-Phone (Telegram) ←→ Telegram API ←→ Your Mac (polls every 5s) ←→ Claude Code
-```
-
-## Features
-
-- 📱 Start/stop Claude sessions from your phone
-- 💬 Send messages to any session
-- 🔔 Get notified when Claude asks questions or finishes
-- ↩️ Reply to messages to route to correct session
-- 🖥️ Auto-opens sessions in Cursor
-- 🔊 Optional TTS read-aloud (toggleable)
-
----
-
-## Installation (5 minutes)
-
-### Step 1: Create Telegram Bot
-
-1. Open Telegram and search for **@BotFather**
-2. Send `/newbot`
-3. Choose a name (e.g., "My Claude Bot")
-4. Choose a username (e.g., "my_claude_bot")
-5. **Copy the bot token** (looks like `123456789:ABCdefGHI...`)
-
-### Step 2: Run Installer
-
-```bash
-# Clone this repo
-git clone <repo-url> ~/claude-telegram-orchestrator
-cd ~/claude-telegram-orchestrator
-
-# Run installer
-./install.sh
-```
-
-The installer will:
-- Check dependencies (tmux, jq, claude)
-- Ask for your bot token
-- Auto-detect your Chat ID (send a message to your bot when prompted)
-- Install all scripts to `~/.claude/telegram-orchestrator/`
-- Set up auto-start on boot
-- Configure the `tg` terminal command
-
-### Step 3: Test It
-
-From Telegram, send to your bot:
-```
-/new hello world
-```
-
-You should see:
-1. ✅ Notification confirming session started
-2. 🖥️ Cursor opens with the session attached
-3. 📝 Claude's response in Telegram
-
----
-
-## Usage
-
-### Telegram Commands
-
-| Command | Action |
-|---------|--------|
-| `/new` | Start new Claude session |
-| `/new fix the login bug` | Start with initial task |
-| `/status` | List all active sessions |
-| `/kill 1` | Kill session claude-1 |
-| `/tts` | Toggle TTS read-aloud |
-| `/1 yes` | Send "yes" to session 1 |
-| `/1 2` | Select option 2 in session 1's menu |
-| Any text | Send to most recent session |
-| **Reply to message** | Route to that session |
-
-### Terminal Commands
-
-```bash
-tg status       # List active sessions
-tg new          # Start new session
-tg new "task"   # Start with initial task
-tg attach 1     # Attach to session 1
-tg kill 1       # Kill session 1
-tg logs         # View orchestrator logs
-tg start        # Start daemon
-tg stop         # Stop daemon
-```
-
-### tmux Shortcuts
-
-| Keys | Action |
-|------|--------|
-| `Ctrl+B` then `D` | Detach (leave running) |
-| `Ctrl+B` then `S` | Switch sessions |
-| `tmux ls` | List all sessions |
-
----
+Control Claude Code sessions from Telegram on your phone. Send text or voice messages, get summaries back.
 
 ## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         YOUR MAC                                 │
-│                                                                  │
-│  orchestrator.sh (runs on boot)                                  │
-│       │                                                          │
-│       ├── Polls Telegram every 5 seconds                         │
-│       ├── Parses commands (/new, /kill, /1, etc.)               │
-│       └── Routes messages to correct tmux session                │
-│                                                                  │
-│  tmux sessions                                                   │
-│       │                                                          │
-│       ├── claude-1: Claude Code (--dangerously-skip-permissions) │
-│       ├── claude-2: Claude Code                                  │
-│       └── claude-3: Claude Code                                  │
-│                                                                  │
-│  session-monitor.sh (per session)                                │
-│       │                                                          │
-│       ├── Watches Claude output                                  │
-│       ├── Detects questions, errors, completions                 │
-│       └── Sends notifications to Telegram                        │
-└─────────────────────────────────────────────────────────────────┘
+Phone (Telegram)                    Mac
+     │                               │
+     │  "fix the auth bug"           │
+     ├──────────────────────────────>│ orchestrator.sh receives
+     │                               │ injects to Claude session
+     │                               │
+     │                               │ Claude works...
+     │                               │ Claude calls send-summary.sh
+     │                               │
+     │  [claude-1] Fixed auth bug    │
+     │<──────────────────────────────┤
+     │  in login.ts:45...            │
+     │                               │
+     │  (reply to continue)          │
+     └───────────────────────────────┘
 ```
 
-**No cloud servers required** - everything runs locally on your Mac, communicating directly with Telegram's API.
+## Features
 
----
+- **Text messages** - Send tasks directly
+- **Voice messages** - Transcribed via Whisper API
+- **Multiple sessions** - Run claude-1, claude-2, etc. simultaneously
+- **Reply routing** - Reply to a `[claude-X]` message to continue with that session
+- **Immediate feedback** - Claude sends summaries directly (no waiting)
 
-## Configuration
+## Commands
 
-Edit `~/.claude/telegram-orchestrator/config.env`:
+| Command | Description |
+|---------|-------------|
+| `/new` | Start new Claude session |
+| `/new fix the bug` | Start with initial task |
+| `/status` | List active sessions |
+| `/kill 2` | Stop session claude-2 |
+| `/tts` | Toggle TTS on Mac |
+
+## Routing Messages
+
+**Default:** Messages go to the most recent session.
+
+**Specific session:** Reply to any `[claude-X]` tagged message - your reply goes to that session.
+
+## Setup
+
+### Prerequisites
+
+- macOS with Homebrew
+- Claude Code CLI (`claude`)
+- tmux, jq, curl
+
+### 1. Create Telegram Bot
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram
+2. Send `/newbot`, follow prompts
+3. Copy the bot token
+
+### 2. Configure
 
 ```bash
-TELEGRAM_BOT_TOKEN="your-token"
-TELEGRAM_CHAT_ID="your-chat-id"
-POLL_INTERVAL=5          # Seconds between polls
-MAX_SESSIONS=5           # Max concurrent sessions
+cd ~/.claude/telegram-orchestrator
+
+# Copy example config
+cp config.env.example config.env
+
+# Create secrets file
+cat > .env.local << 'EOF'
+TELEGRAM_BOT_TOKEN="your-bot-token-here"
+TELEGRAM_CHAT_ID=""  # Auto-detected on first message
+OPENAI_API_KEY="sk-..."  # For voice transcription
+EOF
 ```
 
----
+### 3. Set Bot Commands
+
+```bash
+# Run once to register commands with Telegram
+curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setMyCommands" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "commands": [
+      {"command": "status", "description": "List active Claude sessions"},
+      {"command": "new", "description": "Start new Claude session"},
+      {"command": "kill", "description": "Stop a session (e.g. /kill 1)"},
+      {"command": "tts", "description": "Toggle TTS read-aloud"}
+    ]
+  }'
+```
+
+### 4. Install LaunchAgent (Auto-start)
+
+```bash
+mkdir -p ~/Library/LaunchAgents
+
+cat > ~/Library/LaunchAgents/com.claude.telegram-orchestrator.plist << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.telegram-orchestrator</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/YOUR_USERNAME/.claude/telegram-orchestrator/orchestrator.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/.claude/telegram-orchestrator/logs/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/.claude/telegram-orchestrator/logs/launchd.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    </dict>
+</dict>
+</plist>
+EOF
+
+# Replace YOUR_USERNAME
+sed -i '' "s/YOUR_USERNAME/$USER/g" ~/Library/LaunchAgents/com.claude.telegram-orchestrator.plist
+
+# Load
+launchctl load ~/Library/LaunchAgents/com.claude.telegram-orchestrator.plist
+```
+
+### 5. Enable
+
+```bash
+touch ~/.claude/telegram-orchestrator/enabled
+```
+
+## File Structure
+
+```
+~/.claude/telegram-orchestrator/
+├── orchestrator.sh      # Main daemon - polls Telegram, routes messages
+├── send-summary.sh      # Sends summaries to Telegram immediately
+├── notify.sh            # System notifications (errors, status)
+├── start-claude.sh      # Creates new Claude tmux sessions
+├── config.env           # Settings (poll interval, max sessions)
+├── .env.local           # Secrets (bot token, API keys) - gitignored
+├── enabled              # Touch to enable, rm to disable
+├── sessions/            # Active session tracking
+├── logs/                # Runtime logs
+└── src/voice/
+    └── transcribe.sh    # Whisper API transcription
+```
+
+## How Claude Sends Summaries
+
+When a message comes from Telegram, the orchestrator appends a tag: `<tg>send-summary.sh</tg>`
+
+Claude sees this and knows to send a summary when done:
+
+```bash
+~/.claude/telegram-orchestrator/send-summary.sh "Your summary here"
+```
+
+The script:
+1. Detects which tmux session it's running in (claude-1, claude-2, etc.)
+2. Tags the message with `[claude-X]`
+3. Sends immediately to Telegram
 
 ## Troubleshooting
 
-### Not receiving messages from Telegram
+### Check if running
 
 ```bash
-# Check if orchestrator is running
 ps aux | grep orchestrator
-
-# View logs
-tg logs
-
-# Restart
-tg stop && tg start
 ```
 
-### Sessions not opening in Cursor
-
-1. Check System Preferences → Privacy → Accessibility
-2. Ensure "Cursor" has permission
-3. Restart Cursor
-
-### Claude not responding to input
+### View logs
 
 ```bash
-# Check session exists
-tmux ls
-
-# Manually test input
-tmux send-keys -t claude-1 "hello"
-tmux send-keys -t claude-1 -H 0d
+tail -f ~/.claude/telegram-orchestrator/logs/orchestrator.log
 ```
 
-### No notifications
+### Restart
 
 ```bash
-# Check monitor is running
-ps aux | grep session-monitor
-
-# Check monitor log
-tail -20 ~/.claude/telegram-orchestrator/logs/monitor-claude-1.log
+launchctl stop com.claude.telegram-orchestrator
+launchctl start com.claude.telegram-orchestrator
 ```
 
----
+### Not receiving messages?
 
-## Uninstall
+1. Check bot token is correct in `.env.local`
+2. Check `enabled` file exists
+3. Send `/status` - if no response, orchestrator isn't running
+4. Check logs for errors
+
+### Voice messages not working?
+
+1. Check `OPENAI_API_KEY` in `.env.local`
+2. Check `logs/voice.log` for errors
+
+## Configuration
+
+### config.env
 
 ```bash
-# Stop daemon
-tg stop
-
-# Remove LaunchAgent
-rm ~/Library/LaunchAgents/com.claude.telegram-orchestrator.plist
-
-# Remove files
-rm -rf ~/.claude/telegram-orchestrator
-
-# Remove alias from .zshrc/.bashrc
-# (manually remove the "Claude Telegram Orchestrator" lines)
+POLL_INTERVAL=5      # Telegram polling interval (seconds)
+MAX_SESSIONS=5       # Maximum concurrent Claude sessions
 ```
 
----
+### .env.local (secrets)
 
-## Requirements
-
-- macOS (tested on Sonoma)
-- [Claude Code CLI](https://claude.ai/code)
-- [Homebrew](https://brew.sh)
-- Telegram account
-
----
+```bash
+TELEGRAM_BOT_TOKEN="..."   # From BotFather
+TELEGRAM_CHAT_ID="..."     # Auto-detected or manual
+OPENAI_API_KEY="..."       # For Whisper voice transcription
+```
 
 ## License
 
-MIT - Use freely, modify as needed.
+MIT
