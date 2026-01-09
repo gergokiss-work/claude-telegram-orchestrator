@@ -55,28 +55,27 @@ get_status() {
             local state_icon=""
             local state_label=""
 
-            # First check the last lines for definitive current state
-            if echo "$last_lines" | grep -q "↵ send"; then
-                state_icon="📝"
-                state_label="has input"
-            elif echo "$last_lines" | grep -q "bypass permissions"; then
-                # At prompt - check if thinking indicator is visible
-                if echo "$full_output" | tail -12 | grep -qE "Ruminating|Swirling|Churning|Crunching|Baking|· thinking"; then
-                    state_icon="⏳"
-                    state_label="thinking"
-                    thinking_count=$((thinking_count + 1))
-                else
-                    state_icon="🟢"
-                    state_label="idle"
-                    idle_count=$((idle_count + 1))
-                fi
-            elif echo "$last_lines" | grep -qE "Ruminating|Swirling|Churning|Crunching|Baking|· thinking"; then
+            # Patterns for detection
+            # Thinking: lines starting with spinner chars (✳ ✶ ✻ ·) followed by word and …
+            local think_pattern="^[✳✶✻·] [A-Z][a-z]+…"
+            # Done: completion indicators
+            local done_pattern="^✻ (Cogitated|Worked|Baked|Crunched|Churned) for"
+
+            # Detect state - priority order
+            if echo "$full_output" | tail -12 | grep -qE "$think_pattern"; then
+                # Currently thinking/processing (spinner visible)
                 state_icon="⏳"
                 state_label="thinking"
                 thinking_count=$((thinking_count + 1))
-            elif echo "$last_lines" | grep -qE "^⏺.*\(.*\)$|Running:|Executing:"; then
-                state_icon="🔄"
-                state_label="working"
+            elif echo "$full_output" | tail -15 | grep -qE "$done_pattern"; then
+                # Completed work
+                state_icon="🟢"
+                state_label="idle"
+                idle_count=$((idle_count + 1))
+            elif echo "$last_lines" | grep -q "bypass permissions"; then
+                state_icon="🟢"
+                state_label="idle"
+                idle_count=$((idle_count + 1))
             else
                 state_icon="💬"
                 state_label="ready"
