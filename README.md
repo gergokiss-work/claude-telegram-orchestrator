@@ -36,6 +36,7 @@ Phone (Telegram)                    Mac
 |---------|-------------|
 | `/new` | Start new Claude session |
 | `/new fix the bug` | Start with initial task |
+| `/resume the auth bug` | Resume a previous session by description |
 | `/status` | List active sessions |
 | `/kill 2` | Stop session claude-2 |
 | `/tts` | Toggle TTS on Mac |
@@ -139,6 +140,20 @@ launchctl load ~/Library/LaunchAgents/com.claude.telegram-orchestrator.plist
 touch ~/.claude/telegram-orchestrator/enabled
 ```
 
+## Resuming Previous Sessions
+
+Use `/resume` with a natural language description to find and resume a previous session:
+
+```
+/resume the auth bug fix
+/resume telegram format work
+/resume react component refactor
+```
+
+The system searches your Claude history (`~/.claude/history.jsonl`) and uses AI to find the best matching session, then starts a new Claude instance with that session's context restored.
+
+**Requirements:** Set `ANTHROPIC_API_KEY` in `.env.local` for semantic search (falls back to keyword matching without it).
+
 ## File Structure
 
 ```
@@ -147,6 +162,7 @@ touch ~/.claude/telegram-orchestrator/enabled
 ├── send-summary.sh      # Sends summaries to Telegram immediately
 ├── notify.sh            # System notifications (errors, status)
 ├── start-claude.sh      # Creates new Claude tmux sessions
+├── find-session.sh      # Finds sessions by natural language query
 ├── config.env           # Settings (poll interval, max sessions)
 ├── .env.local           # Secrets (bot token, API keys) - gitignored
 ├── enabled              # Touch to enable, rm to disable

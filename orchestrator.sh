@@ -226,6 +226,23 @@ process_message() {
             "$SCRIPT_DIR/notify.sh" "error" "system" "Usage: /kill <number>"
         fi
 
+    elif [[ "$message" == /resume* ]]; then
+        query="${message#/resume}"
+        query="${query# }"
+        if [[ -z "$query" ]]; then
+            "$SCRIPT_DIR/notify.sh" "error" "system" "Usage: /resume <description>
+Example: /resume the auth bug fix"
+        else
+            "$SCRIPT_DIR/notify.sh" "update" "system" "Searching for session: $query..."
+            session_id=$("$SCRIPT_DIR/find-session.sh" "$query" 2>/dev/null)
+            if [[ -n "$session_id" ]]; then
+                log "Found session to resume: $session_id"
+                "$SCRIPT_DIR/start-claude.sh" --resume "$session_id"
+            else
+                "$SCRIPT_DIR/notify.sh" "error" "system" "No matching session found for: $query"
+            fi
+        fi
+
     else
         # Use target_session if provided (from reply routing), otherwise find latest
         local session_to_use="$target_session"
