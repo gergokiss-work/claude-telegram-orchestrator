@@ -1,6 +1,7 @@
 #!/bin/bash
 # send-summary.sh - Send a summary to Telegram immediately
 # Usage: send-summary.sh "Your summary message here"
+#        send-summary.sh --session claude-1 "Your message"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SESSIONS_DIR="$SCRIPT_DIR/sessions"
@@ -8,15 +9,27 @@ SESSIONS_DIR="$SCRIPT_DIR/sessions"
 [[ -f "$SCRIPT_DIR/.env.local" ]] && source "$SCRIPT_DIR/.env.local"
 [[ -f "$SCRIPT_DIR/config.env" ]] && source "$SCRIPT_DIR/config.env"
 
+# Parse args - check for --session flag
+SESSION_OVERRIDE=""
+if [[ "$1" == "--session" ]]; then
+    SESSION_OVERRIDE="$2"
+    shift 2
+fi
+
 MESSAGE="$1"
 [[ -z "$MESSAGE" ]] && exit 0
 
 mkdir -p "$SESSIONS_DIR"
 
 # Determine session name
-if [[ -n "$TMUX" ]]; then
+if [[ -n "$SESSION_OVERRIDE" ]]; then
+    SESSION="$SESSION_OVERRIDE"
+elif [[ -n "$TMUX" ]]; then
     # Running in tmux - use tmux session name
     SESSION=$(tmux display-message -p '#S' 2>/dev/null || echo "claude")
+elif [[ -n "$CLAUDE_SESSION" ]]; then
+    # Check for env var set by orchestrator
+    SESSION="$CLAUDE_SESSION"
 else
     # Running outside tmux (e.g., Cursor terminal)
     # Use a persistent ID based on this terminal session

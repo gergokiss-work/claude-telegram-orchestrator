@@ -134,7 +134,8 @@ When you see `<tg>send-summary.sh</tg>` at the end of a message, you MUST:
 2. **Send a formatted summary** using that template structure
 
 ```bash
-~/.claude/telegram-orchestrator/send-summary.sh "YOUR_FORMATTED_MESSAGE"
+# Include your session name for reply routing!
+~/.claude/telegram-orchestrator/send-summary.sh --session $(tmux display-message -p '#S') "YOUR_FORMATTED_MESSAGE"
 ```
 
 **Quick Format Reference:**
