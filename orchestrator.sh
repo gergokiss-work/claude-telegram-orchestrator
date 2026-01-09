@@ -6,6 +6,18 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Lock file to prevent duplicate instances
+LOCK_FILE="$SCRIPT_DIR/.orchestrator.lock"
+if [[ -f "$LOCK_FILE" ]]; then
+    OLD_PID=$(cat "$LOCK_FILE")
+    if kill -0 "$OLD_PID" 2>/dev/null; then
+        echo "Orchestrator already running (PID $OLD_PID). Exiting."
+        exit 0
+    fi
+fi
+echo $$ > "$LOCK_FILE"
+trap "rm -f '$LOCK_FILE'" EXIT
+
 # Source configs - .env.local for secrets, config.env for settings
 [[ -f "$SCRIPT_DIR/.env.local" ]] && source "$SCRIPT_DIR/.env.local"
 [[ -f "$SCRIPT_DIR/config.env" ]] && source "$SCRIPT_DIR/config.env"
@@ -23,6 +35,8 @@ log() {
 get_status() {
     local status_msg=""
     local active_count=0
+    local thinking_count=0
+    local idle_count=0
 
     # Check tmux sessions (claude-N)
     for session_file in "$SESSIONS_DIR"/claude-*; do
@@ -33,35 +47,64 @@ get_status() {
         if tmux has-session -t "$session_name" 2>/dev/null; then
             active_count=$((active_count + 1))
 
-            # Get last few lines to determine state
-            last_output=$(tmux capture-pane -t "$session_name" -p -S -10 2>/dev/null | grep -v '^$' | tail -5)
+            # Get output - full for context, last 5 lines for current state
+            local full_output=$(tmux capture-pane -t "$session_name" -p -S -15 2>/dev/null)
+            local last_lines=$(echo "$full_output" | tail -8)
 
-            # Detect state from output
-            local state_icon="⏳"  # default: working
-            if echo "$last_output" | grep -q "bypass permissions\|↵ send\|❯"; then
-                state_icon="💬"  # waiting for input
+            # Detect state - check CURRENT state first (bottom of screen)
+            local state_icon=""
+            local state_label=""
+
+            # First check the last lines for definitive current state
+            if echo "$last_lines" | grep -q "↵ send"; then
+                state_icon="📝"
+                state_label="has input"
+            elif echo "$last_lines" | grep -q "bypass permissions"; then
+                # At prompt - check if thinking indicator is visible
+                if echo "$full_output" | tail -12 | grep -qE "Ruminating|Swirling|Churning|Crunching|Baking|· thinking"; then
+                    state_icon="⏳"
+                    state_label="thinking"
+                    thinking_count=$((thinking_count + 1))
+                else
+                    state_icon="🟢"
+                    state_label="idle"
+                    idle_count=$((idle_count + 1))
+                fi
+            elif echo "$last_lines" | grep -qE "Ruminating|Swirling|Churning|Crunching|Baking|· thinking"; then
+                state_icon="⏳"
+                state_label="thinking"
+                thinking_count=$((thinking_count + 1))
+            elif echo "$last_lines" | grep -qE "^⏺.*\(.*\)$|Running:|Executing:"; then
+                state_icon="🔄"
+                state_label="working"
+            else
+                state_icon="💬"
+                state_label="ready"
+                idle_count=$((idle_count + 1))
             fi
 
-            # Special icon for coordinator
+            # Special handling for coordinator
             if [[ "$session_name" == "claude-0" ]]; then
-                state_icon="🎯"  # coordinator
+                state_icon="🎯"
             fi
 
-            # Get a clean preview (last meaningful line)
-            local preview=$(echo "$last_output" | grep -v "^─\|bypass\|shift+tab" | tail -1 | cut -c1-60)
-
-            # Label coordinator
-            local label="(tmux)"
-            if [[ "$session_name" == "claude-0" ]]; then
-                label="(coordinator)"
+            # Get context: what's the session doing?
+            local context=""
+            # Check for thinking time
+            local think_time=$(echo "$full_output" | grep -oE "thought for [0-9]+s|[0-9]+m [0-9]+s" | tail -1)
+            if [[ -n "$think_time" ]]; then
+                context="($think_time)"
+            fi
+            # Check for token count
+            local tokens=$(echo "$full_output" | grep -oE "↓ [0-9.]+k tokens" | tail -1)
+            if [[ -n "$tokens" ]]; then
+                context="$context $tokens"
             fi
 
-            status_msg+="$state_icon <b>$session_name</b> $label
-<code>$preview</code>
-
+            status_msg+="$state_icon <b>$session_name</b> <i>$state_label</i> $context
 "
         else
-            status_msg+="🔴 <b>$session_name</b> stopped
+            status_msg+="🔴 <b>$session_name</b> <i>stopped</i>
 "
             rm -f "$session_file" "$session_file.monitor.pid"
         fi
@@ -90,9 +133,13 @@ get_status() {
     if [[ -z "$status_msg" ]]; then
         status_msg="No active sessions. Use /new to start one."
     else
-        status_msg="📊 <b>$active_count session(s) active</b>
+        local summary="📊 <b>$active_count sessions</b>"
+        [[ $thinking_count -gt 0 ]] && summary+=" · $thinking_count thinking"
+        [[ $idle_count -gt 0 ]] && summary+=" · $idle_count idle"
+        status_msg="$summary
 
-$status_msg"
+$status_msg
+<i>🟢idle ⏳thinking 🔄working 📝has input 🎯coordinator</i>"
     fi
 
     echo "$status_msg"

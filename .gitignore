@@ -4,6 +4,9 @@
 *.env.local
 config.env
 
+# Runtime lock file
+.orchestrator.lock
+
 # Runtime data
 data/
 logs/
