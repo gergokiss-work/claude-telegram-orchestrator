@@ -10,16 +10,30 @@ source "$SCRIPT_DIR/config.env"
 
 # Parse arguments
 RESUME_SESSION=""
+RESUME_QUERY=""
 INITIAL_PROMPT=""
 WORKING_DIR="$HOME"
 
-if [[ "$1" == "--resume" ]]; then
-    RESUME_SESSION="$2"
-    WORKING_DIR="${3:-$HOME}"
-else
-    INITIAL_PROMPT="${1:-}"
-    WORKING_DIR="${2:-$HOME}"
-fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --resume)
+            RESUME_SESSION="$2"
+            shift 2
+            ;;
+        --query)
+            RESUME_QUERY="$2"
+            shift 2
+            ;;
+        *)
+            if [[ -z "$INITIAL_PROMPT" ]]; then
+                INITIAL_PROMPT="$1"
+            else
+                WORKING_DIR="$1"
+            fi
+            shift
+            ;;
+    esac
+done
 
 SESSIONS_DIR="$SCRIPT_DIR/sessions"
 mkdir -p "$SESSIONS_DIR"
@@ -65,7 +79,8 @@ if [[ -n "$RESUME_SESSION" ]]; then
   "name": "$SESSION_NAME",
   "started": "$(date -Iseconds)",
   "cwd": "$WORKING_DIR",
-  "resumed_from": "$RESUME_SESSION"
+  "resumed_from": "$RESUME_SESSION",
+  "resume_query": "$RESUME_QUERY"
 }
 EOF
 else
@@ -84,8 +99,14 @@ fi
 
 # Notify
 if [[ -n "$RESUME_SESSION" ]]; then
-    "$SCRIPT_DIR/notify.sh" "new" "$SESSION_NAME" "Resumed session ${RESUME_SESSION:0:8}...
+    if [[ -n "$RESUME_QUERY" ]]; then
+        "$SCRIPT_DIR/notify.sh" "new" "$SESSION_NAME" "🔄 Resumed: \"$RESUME_QUERY\"
+Session: ${RESUME_SESSION:0:8}...
 Use: tmux attach -t $SESSION_NAME"
+    else
+        "$SCRIPT_DIR/notify.sh" "new" "$SESSION_NAME" "🔄 Resumed session ${RESUME_SESSION:0:8}...
+Use: tmux attach -t $SESSION_NAME"
+    fi
     echo "Started $SESSION_NAME (resumed from $RESUME_SESSION)"
 else
     "$SCRIPT_DIR/notify.sh" "new" "$SESSION_NAME" "Started in $WORKING_DIR

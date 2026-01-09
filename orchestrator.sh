@@ -237,7 +237,7 @@ Example: /resume the auth bug fix"
             session_id=$("$SCRIPT_DIR/find-session.sh" "$query" 2>/dev/null)
             if [[ -n "$session_id" ]]; then
                 log "Found session to resume: $session_id"
-                "$SCRIPT_DIR/start-claude.sh" --resume "$session_id"
+                "$SCRIPT_DIR/start-claude.sh" --resume "$session_id" --query "$query"
             else
                 "$SCRIPT_DIR/notify.sh" "error" "system" "No matching session found for: $query"
             fi
