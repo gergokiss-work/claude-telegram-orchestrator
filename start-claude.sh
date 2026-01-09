@@ -48,9 +48,9 @@ cat > "$SESSIONS_DIR/$SESSION_NAME" << EOF
 }
 EOF
 
-# Start session monitor
-nohup "$SCRIPT_DIR/session-monitor.sh" "$SESSION_NAME" >> "$SCRIPT_DIR/logs/monitor-$SESSION_NAME.log" 2>&1 &
-echo $! > "$SESSIONS_DIR/$SESSION_NAME.monitor.pid"
+# Session monitor disabled - using queue-based summaries instead
+# nohup "$SCRIPT_DIR/session-monitor.sh" "$SESSION_NAME" >> "$SCRIPT_DIR/logs/monitor-$SESSION_NAME.log" 2>&1 &
+# echo $! > "$SESSIONS_DIR/$SESSION_NAME.monitor.pid"
 
 # Notify
 "$SCRIPT_DIR/notify.sh" "new" "$SESSION_NAME" "Started in $WORKING_DIR

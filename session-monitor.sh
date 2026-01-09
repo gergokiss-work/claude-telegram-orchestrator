@@ -49,13 +49,13 @@ send_notify() {
 is_working() {
     local output="$1"
     # Check last few lines for active work indicators
-    echo "$output" | tail -8 | grep -qE 'Marinating|Thinking\.\.\.|tokens remaining|^⏺ (Bash|Read|Edit|Write|Grep|Glob|Task|Update)'
+    echo "$output" | tail -8 | grep -qE 'Marinating|Scurrying|Noodling|Brewing|Thinking\.\.\.|tokens remaining|^⏺ (Bash|Read|Edit|Write|Grep|Glob|Task|Update)'
 }
 
 is_at_prompt() {
     local last_line=$(echo "$1" | tail -1)
-    # Empty line or prompt indicator means Claude is waiting
-    [[ -z "$last_line" ]] || echo "$last_line" | grep -qE '^\s*>\s*$|^\s*$|^❯'
+    # Empty line, prompt indicator, or permission menu means Claude is waiting
+    [[ -z "$last_line" ]] || echo "$last_line" | grep -qE '^\s*>\s*$|^\s*$|^❯|⏵⏵|bypass permissions|shift\+tab'
 }
 
 log "Starting monitor (v7 - AI extraction)"

@@ -47,30 +47,10 @@ $last_output
     echo "$status"
 }
 
-select_option() {
-    local session="$1"
-    local option_num="$2"
-
-    if ! tmux has-session -t "$session" 2>/dev/null; then
-        log "Session $session not found"
-        "$SCRIPT_DIR/notify.sh" "error" "$session" "Session not found"
-        return 1
-    fi
-
-    local moves=$((option_num - 1))
-    for ((i=0; i<moves; i++)); do
-        tmux send-keys -t "$session" Down
-        sleep 0.1
-    done
-
-    sleep 0.2
-    tmux send-keys -t "$session" -H 0d
-    log "Selected option $option_num in $session"
-}
-
 inject_input() {
     local session="$1"
     local input="$2"
+    local from_telegram="${3:-false}"
 
     if ! tmux has-session -t "$session" 2>/dev/null; then
         log "Session $session not found"
@@ -78,9 +58,26 @@ inject_input() {
         return 1
     fi
 
-    tmux send-keys -t "$session" "$input"
-    tmux send-keys -t "$session" -H 0d
-    log "Injected to $session: $input"
+    # Append summary instruction for Telegram messages
+    if [[ "$from_telegram" == "true" ]]; then
+        input="$input
+
+[TELEGRAM] When done, send summary: ~/.claude/telegram-orchestrator/send-summary.sh \"your summary here\""
+    fi
+
+    # Use temp file + load-buffer for reliable long message injection
+    local tmpfile=$(mktemp)
+    printf '%s' "$input" > "$tmpfile"
+    tmux load-buffer -b telegram_msg "$tmpfile"
+    tmux paste-buffer -b telegram_msg -t "$session"
+    tmux delete-buffer -b telegram_msg 2>/dev/null || true
+    rm -f "$tmpfile"
+
+    # Press Enter
+    sleep 0.2
+    tmux send-keys -t "$session" Enter
+
+    log "Injected to $session: ${input:0:100}..."
 }
 
 kill_session() {
@@ -106,9 +103,6 @@ process_voice() {
 
     log "Processing voice message: $file_id"
 
-    # Notify user that we're processing
-    "$SCRIPT_DIR/notify.sh" "update" "system" "🎤 Transcribing voice message..."
-
     # Call transcription script
     transcription=$("$SCRIPT_DIR/src/voice/transcribe.sh" "$file_id" "$message_id" 2>&1)
 
@@ -119,9 +113,6 @@ process_voice() {
     fi
 
     log "Transcribed: $transcription"
-
-    # Show user what was transcribed
-    "$SCRIPT_DIR/notify.sh" "update" "system" "🎤 \"$transcription\""
 
     # Process the transcribed text as a regular message
     process_message "$transcription" "$chat_id"
@@ -165,26 +156,10 @@ process_message() {
             "$SCRIPT_DIR/notify.sh" "error" "system" "Usage: /kill <number>"
         fi
 
-    elif [[ "$message" =~ ^/([0-9]+)[[:space:]]+(select|pick|choose|opt)[[:space:]]+([0-9]+) ]]; then
-        session_num="${BASH_REMATCH[1]}"
-        option_num="${BASH_REMATCH[3]}"
-        select_option "claude-$session_num" "$option_num"
-
-    elif [[ "$message" =~ ^/([0-9]+)(.*) ]]; then
-        session_num="${BASH_REMATCH[1]}"
-        input="${BASH_REMATCH[2]}"
-        input="${input# }"
-
-        if [[ "$input" =~ ^[0-9]+$ ]]; then
-            select_option "claude-$session_num" "$input"
-        else
-            inject_input "claude-$session_num" "$input"
-        fi
-
     else
         latest_session=$(ls -t "$SESSIONS_DIR"/claude-* 2>/dev/null | grep -v '.pid' | head -1 | xargs basename 2>/dev/null || echo "")
         if [[ -n "$latest_session" ]] && tmux has-session -t "$latest_session" 2>/dev/null; then
-            inject_input "$latest_session" "$message"
+            inject_input "$latest_session" "$message" "true"
         else
             "$SCRIPT_DIR/notify.sh" "error" "system" "No active session. Use /new to start one."
         fi
@@ -227,7 +202,7 @@ while true; do
                     if [[ "$reply_to_text" =~ \[claude-([0-9]+)\] ]]; then
                         session_num="${BASH_REMATCH[1]}"
                         log "Reply detected for claude-$session_num: $message_text"
-                        inject_input "claude-$session_num" "$message_text"
+                        inject_input "claude-$session_num" "$message_text" "true"
                         LAST_UPDATE_ID=$update_id
                         continue
                     fi

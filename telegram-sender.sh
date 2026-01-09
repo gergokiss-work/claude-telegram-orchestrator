@@ -41,9 +41,11 @@ trap "rm -f '$LOCK_FILE'" EXIT
 MESSAGE=$(cat "$SUMMARY_FILE")
 [[ -z "$MESSAGE" ]] && { rm -f "$SUMMARY_FILE"; exit 0; }
 
-# Get session name from filename if present, otherwise use "claude"
-FILENAME=$(basename "$SUMMARY_FILE")
+# Get session name from tmux if running inside one, otherwise use "claude"
 SESSION="claude"
+if [[ -n "$TMUX" ]]; then
+    SESSION=$(tmux display-message -p '#S' 2>/dev/null || echo "claude")
+fi
 
 # Format message
 FORMATTED="📝 <b>[$SESSION]</b>

@@ -82,6 +82,7 @@ transcription=$(curl -s "https://api.openai.com/v1/audio/transcriptions" \
     -H "Authorization: Bearer $OPENAI_API_KEY" \
     -F "file=@$converted_file" \
     -F "model=whisper-1" \
+    -F "language=en" \
     -F "response_format=text")
 
 if [[ -z "$transcription" ]]; then
