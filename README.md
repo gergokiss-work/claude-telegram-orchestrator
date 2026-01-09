@@ -196,13 +196,42 @@ When a message comes from Telegram, the orchestrator appends a tag: `<tg>send-su
 Claude sees this and knows to send a summary when done:
 
 ```bash
-~/.claude/telegram-orchestrator/send-summary.sh "Your summary here"
+# IMPORTANT: Use --session flag to include [claude-X] tag for reply routing
+~/.claude/telegram-orchestrator/send-summary.sh --session $(tmux display-message -p '#S') "Your summary here"
 ```
 
 The script:
-1. Detects which tmux session it's running in (claude-1, claude-2, etc.)
-2. Tags the message with `[claude-X]`
+1. Uses `--session` flag to identify which session is sending
+2. Tags the message with `[claude-X]` for reply routing
 3. Sends immediately to Telegram
+
+### Message Format
+
+See `TELEGRAM_FORMAT.md` for the standard format:
+```
+{STATUS_EMOJI} <b>{Title}</b>
+
+🎯 <b>Request:</b> What was asked
+📋 <b>Result:</b>
+• Key points
+💡 <i>Next steps</i>
+```
+
+## Coordinator (claude-0)
+
+The coordinator session runs persistently and:
+- Receives all non-reply messages
+- Can spawn worker sessions (claude-1, claude-2...)
+- Delegates tasks and monitors progress
+- Injects tasks to other sessions via tmux
+
+### Coordinator System Prompt
+
+`start-claude.sh --coordinator` appends `coordinator-claude.md` to claude-0's system prompt, giving it:
+- Exact tmux injection commands
+- Session checking patterns
+- Troubleshooting knowledge
+- Routing responsibilities
 
 ## Troubleshooting
 
