@@ -58,7 +58,7 @@ claude-0 (coordinator) ← Always running, receives non-reply messages
 
 ## Routing Messages
 
-**Default:** Messages go to the most recent session.
+**Default:** Messages go to `claude-0` (the coordinator).
 
 **Specific session:** Reply to any `[claude-X]` tagged message - your reply goes to that session.
 
@@ -102,6 +102,7 @@ curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setMyCommands" \
     "commands": [
       {"command": "status", "description": "List active Claude sessions"},
       {"command": "new", "description": "Start new Claude session"},
+      {"command": "resume", "description": "Resume session by description"},
       {"command": "kill", "description": "Stop a session (e.g. /kill 1)"},
       {"command": "tts", "description": "Toggle TTS read-aloud"}
     ]
@@ -251,6 +252,7 @@ MAX_SESSIONS=5       # Maximum concurrent Claude sessions
 TELEGRAM_BOT_TOKEN="..."   # From BotFather
 TELEGRAM_CHAT_ID="..."     # Auto-detected or manual
 OPENAI_API_KEY="..."       # For Whisper voice transcription
+ANTHROPIC_API_KEY="..."    # For semantic /resume search (optional)
 ```
 
 ## License
