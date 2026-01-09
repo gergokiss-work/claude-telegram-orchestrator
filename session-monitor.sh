@@ -1,10 +1,14 @@
 #!/bin/bash
 # session-monitor.sh - Monitor a tmux session for Claude state changes
+# Enhanced with AI-powered output formatting via OpenAI GPT-4o-mini
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/config.env"
+
+# Source configs
+[[ -f "$SCRIPT_DIR/.env.local" ]] && source "$SCRIPT_DIR/.env.local"
+[[ -f "$SCRIPT_DIR/config.env" ]] && source "$SCRIPT_DIR/config.env"
 
 SESSION="$1"
 
@@ -17,18 +21,45 @@ LAST_HASH=""
 LAST_NOTIFY_TIME=0
 MIN_NOTIFY_INTERVAL=10
 
+LOG_FILE="$SCRIPT_DIR/logs/monitor-$SESSION.log"
+
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $SESSION: $*"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $SESSION: $*" >> "$LOG_FILE"
+}
+
+# Format output using AI if available and content is long
+format_output() {
+    local content="$1"
+    local char_count=${#content}
+
+    # If formatting script exists and content is substantial, use it
+    if [[ -x "$SCRIPT_DIR/src/ai/format-output.sh" ]] && [[ $char_count -gt 500 ]]; then
+        formatted=$("$SCRIPT_DIR/src/ai/format-output.sh" "$content" 2>/dev/null || echo "$content")
+        echo "$formatted"
+    else
+        # Basic cleanup for short content
+        echo "$content" | \
+            sed 's/\x1b\[[0-9;]*m//g' | \
+            grep -vE '^\s*$' | \
+            grep -vE '^⏺ (Bash|Read|Edit|Write|Grep|Glob|Task)' | \
+            tail -20
+    fi
 }
 
 notify_if_needed() {
     local type="$1"
     local message="$2"
+    local use_formatting="${3:-false}"
     local current_time=$(date +%s)
 
     if [[ $((current_time - LAST_NOTIFY_TIME)) -lt $MIN_NOTIFY_INTERVAL ]]; then
         log "Skipping notification (rate limited)"
         return
+    fi
+
+    # Format the output if requested
+    if [[ "$use_formatting" == "true" ]]; then
+        message=$(format_output "$message")
     fi
 
     "$SCRIPT_DIR/notify.sh" "$type" "$SESSION" "$message"
@@ -83,11 +114,12 @@ Reply: /<session> <number>"
             notify_if_needed "waiting" "$formatted"
         fi
 
-        # Check for Claude response
+        # Check for Claude response (use formatting for substantial output)
         if echo "$last_lines" | grep -qE '^⏺|^✓|^✗'; then
             log "Detected Claude response"
-            response=$(echo "$last_lines" | grep -A5 '^⏺' | head -6)
-            notify_if_needed "update" "$response"
+            # Get more context for formatting
+            response=$(echo "$output" | tail -50)
+            notify_if_needed "update" "$response" "true"
         fi
 
         # Check for completion

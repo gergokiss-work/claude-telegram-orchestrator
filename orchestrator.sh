@@ -1,10 +1,14 @@
 #!/bin/bash
 # orchestrator.sh - Main daemon that polls Telegram for commands
+# Enhanced with voice message support via OpenAI Whisper
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/config.env"
+
+# Source configs - .env.local for secrets, config.env for settings
+[[ -f "$SCRIPT_DIR/.env.local" ]] && source "$SCRIPT_DIR/.env.local"
+[[ -f "$SCRIPT_DIR/config.env" ]] && source "$SCRIPT_DIR/config.env"
 
 LOG_FILE="$SCRIPT_DIR/logs/orchestrator.log"
 LAST_UPDATE_ID=0
@@ -94,6 +98,35 @@ kill_session() {
     rm -f "$SESSIONS_DIR/$session" "$SESSIONS_DIR/$session.monitor.pid"
 }
 
+# Process voice message - transcribe and return text
+process_voice() {
+    local file_id="$1"
+    local message_id="$2"
+    local chat_id="$3"
+
+    log "Processing voice message: $file_id"
+
+    # Notify user that we're processing
+    "$SCRIPT_DIR/notify.sh" "update" "system" "🎤 Transcribing voice message..."
+
+    # Call transcription script
+    transcription=$("$SCRIPT_DIR/src/voice/transcribe.sh" "$file_id" "$message_id" 2>&1)
+
+    if [[ "$transcription" == ERROR* ]]; then
+        log "Voice transcription failed: $transcription"
+        "$SCRIPT_DIR/notify.sh" "error" "system" "Voice transcription failed: $transcription"
+        return 1
+    fi
+
+    log "Transcribed: $transcription"
+
+    # Show user what was transcribed
+    "$SCRIPT_DIR/notify.sh" "update" "system" "🎤 \"$transcription\""
+
+    # Process the transcribed text as a regular message
+    process_message "$transcription" "$chat_id"
+}
+
 process_message() {
     local message="$1"
     local chat_id="$2"
@@ -172,8 +205,21 @@ while true; do
             [[ -z "$update" ]] && continue
 
             update_id=$(echo "$update" | jq -r '.update_id')
-            message_text=$(echo "$update" | jq -r '.message.text // empty')
             chat_id=$(echo "$update" | jq -r '.message.chat.id // empty')
+            message_id=$(echo "$update" | jq -r '.message.message_id // empty')
+
+            # Check for voice message first
+            voice_file_id=$(echo "$update" | jq -r '.message.voice.file_id // empty')
+
+            if [[ -n "$voice_file_id" && -n "$chat_id" ]]; then
+                log "Received voice message from $chat_id"
+                process_voice "$voice_file_id" "$message_id" "$chat_id"
+                LAST_UPDATE_ID=$update_id
+                continue
+            fi
+
+            # Check for text message
+            message_text=$(echo "$update" | jq -r '.message.text // empty')
             reply_to_text=$(echo "$update" | jq -r '.message.reply_to_message.text // empty')
 
             if [[ -n "$message_text" && -n "$chat_id" ]]; then
