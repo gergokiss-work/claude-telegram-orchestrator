@@ -1,0 +1,22 @@
+# Environment files with secrets
+.env.local
+.env
+*.env.local
+
+# Runtime data
+data/
+logs/
+sessions/
+*.db
+
+# Temp files
+temp/
+*.oga
+*.wav
+*.mp3
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
