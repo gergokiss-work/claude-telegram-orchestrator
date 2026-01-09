@@ -33,13 +33,21 @@ fi
 # Step 1: Basic cleanup (always do this, no AI needed)
 cleaned=$(echo "$RAW_OUTPUT" | \
     sed 's/\x1b\[[0-9;]*m//g' | \
+    sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | \
     grep -vE '^\s*$' | \
-    grep -vE '^(╭|╰|│|─|├|┤|┬|┴|┼)' | \
-    grep -vE '^⏺ (Bash|Read|Edit|Write|Grep|Glob|Task|Update|WebFetch|WebSearch|TodoWrite|NotebookEdit)' | \
-    grep -vE '^\s*(Running|Completed|Output|Marinating|Thinking)' | \
-    grep -vE 'tokens remaining|bypass permissions|esc to interrupt|shift\+tab' | \
-    grep -vE '^\s*>\s*$' | \
+    grep -vE '^[╭╰│─├┤┬┴┼━┃┏┓┗┛▸▹►▶→]' | \
+    grep -vE '[╭╰│─├┤┬┴┼━┃┏┓┗┛]+\s*$' | \
+    grep -vE '^⏺ (Bash|Read|Edit|Write|Grep|Glob|Task|Update|WebFetch|WebSearch|TodoWrite|NotebookEdit|Skill|AskUser)' | \
+    grep -vE '^\s*(Running|Completed|Output|Marinating|Thinking)\.*\s*$' | \
+    grep -vE 'tokens remaining|bypass permissions|esc to interrupt|shift.tab|to cycle' | \
+    grep -vE '^\s*[>❯]\s*$' | \
+    grep -vE '^\s*□\s*(pending|in_progress|completed)' | \
+    grep -vE '^\s*✓\s*\[completed\]' | \
+    grep -vE '^\[\s*(completed|in_progress|pending)\s*\]' | \
     cat -s)
+
+# Additional cleanup: remove lines that are just whitespace or box chars
+cleaned=$(echo "$cleaned" | grep -vE '^[\s─━│┃]*$' | cat -s)
 
 char_count=${#cleaned}
 log "Input: $char_count chars after basic cleanup"

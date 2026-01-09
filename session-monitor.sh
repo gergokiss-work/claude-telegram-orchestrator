@@ -1,8 +1,6 @@
 #!/bin/bash
-# session-monitor.sh - Monitor a tmux session for Claude state changes
-# Enhanced with AI-powered output formatting via OpenAI GPT-4o-mini
-
-set -e
+# session-monitor.sh - Monitor a tmux session for Claude responses
+# Only sends notification when Claude is TRULY done (stable idle for 6+ seconds)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -17,58 +15,98 @@ if [[ -z "$SESSION" ]]; then
     exit 1
 fi
 
-LAST_HASH=""
-LAST_NOTIFY_TIME=0
-MIN_NOTIFY_INTERVAL=10
-
 LOG_FILE="$SCRIPT_DIR/logs/monitor-$SESSION.log"
+
+# State tracking
+IDLE_COUNT=0
+IDLE_THRESHOLD=3           # Need 3 consecutive idle checks (6 seconds) before sending
+LAST_RESPONSE_HASH=""
+LAST_NOTIFY_TIME=0
+MIN_NOTIFY_INTERVAL=15     # Minimum 15 seconds between notifications
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $SESSION: $*" >> "$LOG_FILE"
 }
 
-# Format output using AI if available and content is long
-format_output() {
-    local content="$1"
-    local char_count=${#content}
-
-    # If formatting script exists and content is substantial, use it
-    if [[ -x "$SCRIPT_DIR/src/ai/format-output.sh" ]] && [[ $char_count -gt 500 ]]; then
-        formatted=$("$SCRIPT_DIR/src/ai/format-output.sh" "$content" 2>/dev/null || echo "$content")
-        echo "$formatted"
-    else
-        # Basic cleanup for short content
-        echo "$content" | \
-            sed 's/\x1b\[[0-9;]*m//g' | \
-            grep -vE '^\s*$' | \
-            grep -vE '^⏺ (Bash|Read|Edit|Write|Grep|Glob|Task)' | \
-            tail -20
-    fi
-}
-
-notify_if_needed() {
+# Send notification with cooldown
+send_notify() {
     local type="$1"
     local message="$2"
-    local use_formatting="${3:-false}"
-    local current_time=$(date +%s)
+    local now=$(date +%s)
 
-    if [[ $((current_time - LAST_NOTIFY_TIME)) -lt $MIN_NOTIFY_INTERVAL ]]; then
-        log "Skipping notification (rate limited)"
-        return
+    if [[ $((now - LAST_NOTIFY_TIME)) -lt $MIN_NOTIFY_INTERVAL ]]; then
+        log "Skipping (cooldown: $((MIN_NOTIFY_INTERVAL - now + LAST_NOTIFY_TIME))s remaining)"
+        return 1
     fi
 
-    # Format the output if requested
-    if [[ "$use_formatting" == "true" ]]; then
-        message=$(format_output "$message")
+    # Validate message has actual content (not just dashes/boxes/whitespace)
+    local content_check=$(echo "$message" | grep -vE '^[\s─━│┃╭╰├┤┬┴┼▸▹►▶→_\-]*$' | grep -vE '^\s*$' | head -1)
+    if [[ -z "$content_check" ]]; then
+        log "Skipping (no meaningful content)"
+        return 1
     fi
 
     "$SCRIPT_DIR/notify.sh" "$type" "$SESSION" "$message"
-    LAST_NOTIFY_TIME=$current_time
+    LAST_NOTIFY_TIME=$now
+    log "Sent notification: $type (${#message} chars)"
+    return 0
 }
 
-log "Starting monitor"
+# Check if Claude is actively working
+is_working() {
+    local output="$1"
+    local last_lines=$(echo "$output" | tail -10)
+
+    # Check for active processing indicators
+    if echo "$last_lines" | grep -qE 'Marinating|Thinking\.\.\.|tokens remaining'; then
+        return 0  # Working
+    fi
+
+    # Check for tool execution
+    if echo "$last_lines" | grep -qE '^⏺ (Bash|Read|Edit|Write|Grep|Glob|Task|WebFetch|WebSearch|TodoWrite)'; then
+        return 0  # Working
+    fi
+
+    return 1  # Not working
+}
+
+# Check if at input prompt (Claude waiting for user)
+is_at_prompt() {
+    local output="$1"
+    local last_line=$(echo "$output" | tail -1)
+
+    # Empty prompt or just whitespace at end means waiting for input
+    if echo "$last_line" | grep -qE '^\s*>\s*$|^\s*$'; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Extract Claude's meaningful text response
+extract_response() {
+    local raw="$1"
+
+    echo "$raw" | \
+        sed 's/\x1b\[[0-9;]*m//g' | \
+        sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | \
+        grep -vE '^\s*$' | \
+        grep -vE '^[╭╰│─├┤┬┴┼━┃┏┓┗┛▸▹►▶→_\-]+' | \
+        grep -vE '[╭╰│─├┤┬┴┼━┃┏┓┗┛_\-]+\s*$' | \
+        grep -vE 'Marinating|Thinking|tokens|bypass permissions|esc to interrupt|shift.tab|to cycle' | \
+        grep -vE '^⏺ (Bash|Read|Edit|Write|Grep|Glob|Task|Update|WebFetch|WebSearch|TodoWrite)' | \
+        grep -vE '^\s*(Running|Completed|Output)\.*\s*$' | \
+        grep -vE '^\s*[>❯]\s*$' | \
+        grep -vE '^\[\s*(completed|in_progress|pending)\s*\]' | \
+        grep -vE '^\s*□\s*\[' | \
+        tail -40 | \
+        cat -s
+}
+
+log "Starting monitor (v5 - strict content validation)"
 
 while tmux has-session -t "$SESSION" 2>/dev/null; do
+    # Capture pane
     output=$(tmux capture-pane -t "$SESSION" -p -S -100 2>/dev/null || echo "")
 
     if [[ -z "$output" ]]; then
@@ -76,73 +114,49 @@ while tmux has-session -t "$SESSION" 2>/dev/null; do
         continue
     fi
 
-    current_hash=$(echo "$output" | md5 2>/dev/null)
+    # Check current state
+    if is_working "$output"; then
+        IDLE_COUNT=0
+        # Don't log every working state to reduce noise
+    elif is_at_prompt "$output"; then
+        IDLE_COUNT=$((IDLE_COUNT + 1))
 
-    if [[ "$current_hash" != "$LAST_HASH" ]]; then
-        LAST_HASH="$current_hash"
-        last_lines=$(echo "$output" | grep -v '^$' | tail -20)
+        # Only send after stable idle (not just a brief pause)
+        if [[ $IDLE_COUNT -eq $IDLE_THRESHOLD ]]; then
+            response=$(extract_response "$output")
 
-        # Check for questions
-        if echo "$last_lines" | grep -qE '^\s*\?|^>.*\?$|Do you want|Should I|Would you like|Please confirm|y/n|yes/no|\[Y/n\]|\[y/N\]'; then
-            log "Detected question"
-            notify_if_needed "waiting" "$(echo "$last_lines" | tail -10)"
-        fi
+            if [[ -n "$response" ]]; then
+                # Check if this is new content
+                hash=$(echo "$response" | md5)
+                if [[ "$hash" != "$LAST_RESPONSE_HASH" ]]; then
+                    LAST_RESPONSE_HASH="$hash"
 
-        # Check for permission requests
-        if echo "$last_lines" | grep -qE 'Allow|Deny|permission|approve|Press.*to'; then
-            log "Detected permission request"
-            notify_if_needed "waiting" "$(echo "$last_lines" | tail -5)"
-        fi
+                    # Use AI formatting for long responses
+                    if [[ ${#response} -gt 500 ]] && [[ -x "$SCRIPT_DIR/src/ai/format-output.sh" ]]; then
+                        formatted=$("$SCRIPT_DIR/src/ai/format-output.sh" "$response" 2>/dev/null)
+                        if [[ -n "$formatted" ]]; then
+                            response="$formatted"
+                        fi
+                    fi
 
-        # Check for multi-select menus
-        if echo "$last_lines" | grep -qE '^\s*[❯>]\s+\w|^\s*\[\s*[x ]?\s*\]|^\s*[0-9]+[.):]\s+\w'; then
-            log "Detected multi-select menu"
-            options=$(echo "$last_lines" | grep -E '^\s*[❯> ]\s+\w|^\s*\[\s*[x ]?\s*\]|^\s*[0-9]+[.):]\s+\w' | head -10)
-            formatted="Options:
-"
-            i=1
-            while IFS= read -r line; do
-                clean=$(echo "$line" | sed 's/^[[:space:]]*[❯>]//' | sed 's/^\[[^]]*\]//' | xargs)
-                if [[ -n "$clean" ]]; then
-                    formatted+="$i. $clean
-"
-                    i=$((i+1))
+                    log "Claude finished - sending response (${#response} chars)"
+                    send_notify "update" "$response"
+                else
+                    log "Same content as before - skipping"
                 fi
-            done <<< "$options"
-            formatted+="
-Reply: /<session> <number>"
-            notify_if_needed "waiting" "$formatted"
+            else
+                log "No meaningful content extracted"
+            fi
         fi
-
-        # Check for Claude response (use formatting for substantial output)
-        if echo "$last_lines" | grep -qE '^⏺|^✓|^✗'; then
-            log "Detected Claude response"
-            # Get more context for formatting
-            response=$(echo "$output" | tail -50)
-            notify_if_needed "update" "$response" "true"
-        fi
-
-        # Check for completion
-        if echo "$last_lines" | grep -qE 'Task completed|Done\.|Finished|Session ended|goodbye|exiting'; then
-            log "Detected completion"
-            notify_if_needed "complete" "$(echo "$last_lines" | tail -5)"
-        fi
-
-        # Check for errors
-        if echo "$last_lines" | grep -qiE 'error:|failed|exception|fatal'; then
-            log "Detected error"
-            notify_if_needed "error" "$(echo "$last_lines" | grep -iE 'error:|failed|exception|fatal' | tail -5)"
-        fi
+    else
+        # Uncertain state - could be mid-response
+        IDLE_COUNT=0
     fi
 
     sleep 2
 done
 
 log "Session ended"
-
-last_output=$(tmux capture-pane -t "$SESSION" -p -S -30 2>/dev/null | grep -v '^$' | tail -10)
-"$SCRIPT_DIR/notify.sh" "complete" "$SESSION" "Session ended.
-$last_output"
-
+"$SCRIPT_DIR/notify.sh" "complete" "$SESSION" "Session ended"
 rm -f "$SCRIPT_DIR/sessions/$SESSION" "$SCRIPT_DIR/sessions/$SESSION.monitor.pid"
 log "Monitor finished"
