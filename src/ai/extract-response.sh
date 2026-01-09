@@ -39,23 +39,21 @@ SYSTEM_PROMPT='You extract Claude'\''s response from terminal output for mobile 
 
 The input is raw Claude Code CLI terminal output containing:
 - Claude'\''s text responses (EXTRACT THESE)
-- Tool calls like "⏺ Bash(...)", "⏺ Read(...)", "⏺ Update(...)" (SUMMARIZE briefly)
-- Tool outputs like "⎿ ..." (IGNORE unless error)
+- Tool calls like "⏺ Bash(...)", "⏺ Read(...)" (mention briefly what was done)
+- Tool outputs after "⎿" - IMPORTANT: Include these if they answer the user'\''s question!
 - User prompts "❯" or ">" (IGNORE)
-- Diff snippets, code fragments (SUMMARIZE if relevant)
-- Box characters, ANSI noise (IGNORE)
+- Box characters, status bars, ANSI noise (IGNORE)
 
 OUTPUT FORMAT:
-1. Start with Claude'\''s main response text (what Claude said/explained)
-2. If actions were taken, add brief "Actions:" summary
-3. If there are questions needing response, highlight them
+1. Claude'\''s explanation or answer
+2. Key results from commands (if relevant to the question)
+3. Any questions Claude is asking
 
-RULES:
-- Extract the SUBSTANCE, not the terminal chrome
-- Keep responses concise for mobile
-- Preserve important information
-- If Claude asked a question, make it clear
-- Max 1500 chars output'
+CRITICAL RULES:
+- If Claude ran a command and the OUTPUT is the answer (like a list, status, search results), INCLUDE IT
+- Remove terminal chrome (box chars, progress indicators) but KEEP data
+- If Claude asked a question, make it prominent
+- Max 2000 chars output'
 
 escaped_input=$(echo "$cleaned" | jq -Rs .)
 escaped_system=$(echo "$SYSTEM_PROMPT" | jq -Rs .)
@@ -65,7 +63,7 @@ response=$(curl -s "https://api.openai.com/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -d "{
         \"model\": \"gpt-4o-mini\",
-        \"max_tokens\": 800,
+        \"max_tokens\": 1200,
         \"temperature\": 0.2,
         \"messages\": [
             {\"role\": \"system\", \"content\": $escaped_system},
