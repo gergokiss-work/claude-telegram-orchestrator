@@ -24,8 +24,15 @@ SESSION_ID=$(~/.claude/telegram-orchestrator/find-session.sh "n8n")
 
 ## Injecting Tasks to Other Sessions
 
-When user says "tell claude-2 to do X":
+When user says "tell claude-2 to do X", use the inject helper:
 
+```bash
+# Recommended: Use the inject script (handles retries)
+~/.claude/telegram-orchestrator/inject-prompt.sh claude-2 "Your task here
+<tg>send-summary.sh</tg>"
+```
+
+Manual method (if script unavailable):
 ```bash
 # ALWAYS clear leftover input first
 tmux send-keys -t claude-2 C-u
@@ -41,9 +48,13 @@ tmux paste-buffer -b tg_msg -t claude-2
 tmux delete-buffer -b tg_msg 2>/dev/null
 rm -f "$tmpfile"
 
-# Press Enter to submit
-sleep 0.5
+# Press Enter - wait longer and verify!
+sleep 1.0
 tmux send-keys -t claude-2 Enter
+
+# Verify it took (check for "↵ send" still showing)
+sleep 0.5
+tmux capture-pane -t claude-2 -p | tail -3 | grep -q "↵ send" && tmux send-keys -t claude-2 Enter
 ```
 
 ## Checking on Sessions

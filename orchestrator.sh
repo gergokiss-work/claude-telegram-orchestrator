@@ -244,6 +244,55 @@ process_voice() {
     process_message "$transcription" "$chat_id" "$target_session"
 }
 
+# Process photo message - download and inject path to Claude
+process_photo() {
+    local file_id="$1"
+    local message_id="$2"
+    local chat_id="$3"
+    local target_session="$4"  # Optional: from reply routing
+    local caption="$5"         # Optional: photo caption
+
+    log "Processing photo: $file_id (target: ${target_session:-auto})"
+
+    # Download the image
+    local image_path=$("$SCRIPT_DIR/src/image/download.sh" "$file_id" "$message_id" 2>&1)
+
+    if [[ "$image_path" == ERROR* ]]; then
+        log "Photo download failed: $image_path"
+        "$SCRIPT_DIR/notify.sh" "error" "system" "Photo download failed: $image_path"
+        return 1
+    fi
+
+    log "Downloaded image: $image_path"
+
+    # Build message for Claude
+    local message="[Image attached: $image_path]
+
+Please view this image using the Read tool and analyze it."
+
+    if [[ -n "$caption" ]]; then
+        message="$caption
+
+[Image attached: $image_path]"
+    fi
+
+    # Use target_session if provided, otherwise use coordinator
+    local session_to_use="$target_session"
+    if [[ -z "$session_to_use" ]]; then
+        session_to_use="claude-0"
+
+        # Ensure coordinator is running
+        if ! tmux has-session -t "claude-0" 2>/dev/null; then
+            log "Coordinator not running, starting..."
+            "$SCRIPT_DIR/start-claude.sh" --coordinator
+            sleep 3
+        fi
+    fi
+
+    inject_input "$session_to_use" "$message" "true"
+    "$SCRIPT_DIR/notify.sh" "update" "$session_to_use" "📷 Image received and sent to $session_to_use"
+}
+
 process_message() {
     local message="$1"
     local chat_id="$2"
@@ -377,6 +426,17 @@ while true; do
             if [[ -n "$voice_file_id" && -n "$chat_id" ]]; then
                 log "Received voice message from $chat_id (target: ${target_session:-auto})"
                 process_voice "$voice_file_id" "$message_id" "$chat_id" "$target_session"
+                LAST_UPDATE_ID=$update_id
+                continue
+            fi
+
+            # Check for photo message (get largest size - last in array)
+            photo_file_id=$(echo "$update" | jq -r '.message.photo[-1].file_id // empty')
+            photo_caption=$(echo "$update" | jq -r '.message.caption // empty')
+
+            if [[ -n "$photo_file_id" && -n "$chat_id" ]]; then
+                log "Received photo from $chat_id (target: ${target_session:-auto})"
+                process_photo "$photo_file_id" "$message_id" "$chat_id" "$target_session" "$photo_caption"
                 LAST_UPDATE_ID=$update_id
                 continue
             fi
