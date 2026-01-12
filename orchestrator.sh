@@ -349,6 +349,19 @@ Example: /resume the auth bug fix"
             fi
         fi
 
+    elif [[ "$message" == /watchdog* ]]; then
+        watchdog_args="${message#/watchdog}"
+        watchdog_args="${watchdog_args# }"
+        if [[ -z "$watchdog_args" ]]; then
+            # No args = status
+            result=$("$SCRIPT_DIR/watchdog-control.sh" status 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "watchdog" "$result"
+        else
+            # Pass args to control script
+            result=$("$SCRIPT_DIR/watchdog-control.sh" $watchdog_args 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "watchdog" "$result"
+        fi
+
     else
         # Use target_session if provided (from reply routing), otherwise use coordinator
         local session_to_use="$target_session"

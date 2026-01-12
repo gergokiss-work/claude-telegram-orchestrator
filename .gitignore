@@ -11,6 +11,7 @@ config.env
 data/
 logs/
 sessions/
+watchdog-state/
 *.db
 
 # Temp files
