@@ -354,11 +354,11 @@ Example: /resume the auth bug fix"
         watchdog_args="${watchdog_args# }"
         if [[ -z "$watchdog_args" ]]; then
             # No args = status
-            result=$("$SCRIPT_DIR/watchdog-control.sh" status 2>&1)
+            result=$("$SCRIPT_DIR/watchdog.sh" status 2>&1)
             "$SCRIPT_DIR/notify.sh" "update" "watchdog" "$result"
         else
             # Pass args to control script
-            result=$("$SCRIPT_DIR/watchdog-control.sh" $watchdog_args 2>&1)
+            result=$("$SCRIPT_DIR/watchdog.sh" $watchdog_args 2>&1)
             "$SCRIPT_DIR/notify.sh" "update" "watchdog" "$result"
         fi
 

@@ -1,8 +1,0 @@
-# Watchdog Configuration
-# Add one instance name per line
-# Lines starting with # are ignored
-# Edit this file to add/remove instances to watch
-
-claude-4
-claude-5
-claude-3
