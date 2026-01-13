@@ -38,12 +38,8 @@ get_status() {
     local thinking_count=0
     local idle_count=0
 
-    # Check tmux sessions (claude-N)
-    for session_file in "$SESSIONS_DIR"/claude-*; do
-        [[ -f "$session_file" ]] || continue
-        [[ "$session_file" == *.pid ]] && continue
-
-        session_name=$(basename "$session_file")
+    # Check tmux sessions (claude-N) - get directly from tmux, not session files
+    for session_name in $(tmux list-sessions -F "#{session_name}" 2>/dev/null | grep "^claude-[0-9]" | sort -t- -k2 -n); do
         if tmux has-session -t "$session_name" 2>/dev/null; then
             active_count=$((active_count + 1))
 
@@ -102,10 +98,6 @@ get_status() {
 
             status_msg+="$state_icon <b>$session_name</b> <i>$state_label</i> $context
 "
-        else
-            status_msg+="🔴 <b>$session_name</b> <i>stopped</i>
-"
-            rm -f "$session_file" "$session_file.monitor.pid"
         fi
     done
 
