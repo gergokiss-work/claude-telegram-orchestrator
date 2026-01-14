@@ -306,14 +306,16 @@ process_message() {
         "$SCRIPT_DIR/start-claude.sh" "$initial_prompt"
 
     elif [[ "$message" == /tts* ]]; then
-        if [[ -f "$HOME/.claude/tts/enabled" ]]; then
-            rm -f "$HOME/.claude/tts/enabled"
-            "$SCRIPT_DIR/notify.sh" "update" "system" "TTS disabled"
+        tts_arg="${message#/tts}"
+        tts_arg="${tts_arg# }"
+        if [[ -z "$tts_arg" ]]; then
+            # No args = toggle
+            result=$("$HOME/.claude/scripts/tts-toggle.sh" toggle 2>&1)
         else
-            mkdir -p "$HOME/.claude/tts"
-            touch "$HOME/.claude/tts/enabled"
-            "$SCRIPT_DIR/notify.sh" "update" "system" "TTS enabled"
+            # Pass args (on/off/status)
+            result=$("$HOME/.claude/scripts/tts-toggle.sh" "$tts_arg" 2>&1)
         fi
+        "$SCRIPT_DIR/notify.sh" "update" "system" "$result"
 
     elif [[ "$message" == /kill* ]]; then
         session_num="${message#/kill}"
