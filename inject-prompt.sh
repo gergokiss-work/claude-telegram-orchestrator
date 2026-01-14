@@ -6,6 +6,7 @@
 # - Clears existing input
 # - Injects via tmux buffer (handles multiline)
 # - Verifies injection and retries Enter if needed
+# - Longer timeouts for reliability
 
 SESSION="$1"
 PROMPT="$2"
@@ -23,13 +24,13 @@ fi
 
 # Check if session is thinking (can't inject while thinking)
 PANE_CONTENT=$(tmux capture-pane -t "$SESSION" -p | tail -5)
-if echo "$PANE_CONTENT" | grep -q "esc to interrupt"; then
+if echo "$PANE_CONTENT" | grep -qE "(esc to interrupt|thinking|Percolating|Leavening|Misting|Reasoning)"; then
     echo "Warning: $SESSION is currently thinking - injection may queue"
 fi
 
-# Clear any leftover input
+# Clear any leftover input first
 tmux send-keys -t "$SESSION" C-u
-sleep 0.2
+sleep 0.3
 
 # Inject via buffer (handles multiline properly)
 tmpfile=$(mktemp)
@@ -39,26 +40,44 @@ tmux paste-buffer -b inject_buf -t "$SESSION"
 tmux delete-buffer -b inject_buf 2>/dev/null
 rm -f "$tmpfile"
 
-# Wait for paste to complete
-sleep 0.8
+# Wait for paste to fully complete (longer for big prompts)
+sleep 1.5
 
 # Send Enter
 tmux send-keys -t "$SESSION" Enter
 
-# Verify - check if still shows "↵ send" after a moment
-sleep 1.0
-VERIFY=$(tmux capture-pane -t "$SESSION" -p | tail -3)
-if echo "$VERIFY" | grep -q "↵ send"; then
-    echo "First Enter didn't take, retrying..."
+# Wait and verify
+sleep 1.5
+
+# Retry function
+retry_enter() {
+    local attempt=$1
+    echo "Enter attempt $attempt..."
     sleep 0.5
     tmux send-keys -t "$SESSION" Enter
-    sleep 0.5
+    sleep 1.0
+}
 
-    # Check again
-    VERIFY2=$(tmux capture-pane -t "$SESSION" -p | tail -3)
-    if echo "$VERIFY2" | grep -q "↵ send"; then
-        echo "Warning: Enter still not registered. May need manual intervention."
-        exit 2
+# Check if still shows input prompt (Enter didn't register)
+# Also check for "queued messages" which means Enter is needed
+VERIFY=$(tmux capture-pane -t "$SESSION" -p | tail -5)
+if echo "$VERIFY" | grep -qE "(↵ send|queued messages)"; then
+    retry_enter 2
+
+    VERIFY2=$(tmux capture-pane -t "$SESSION" -p | tail -5)
+    if echo "$VERIFY2" | grep -qE "(↵ send|queued messages)"; then
+        retry_enter 3
+
+        VERIFY3=$(tmux capture-pane -t "$SESSION" -p | tail -5)
+        if echo "$VERIFY3" | grep -qE "(↵ send|queued messages)"; then
+            retry_enter 4
+
+            VERIFY4=$(tmux capture-pane -t "$SESSION" -p | tail -5)
+            if echo "$VERIFY4" | grep -qE "(↵ send|queued messages)"; then
+                echo "Warning: Enter still not registered after 4 attempts. Manual intervention needed."
+                exit 2
+            fi
+        fi
     fi
 fi
 
