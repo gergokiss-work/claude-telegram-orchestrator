@@ -8,12 +8,29 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/config.env"
 
+# Account management
+ACCOUNT_DIR="$HOME/.claude/account-manager"
+get_active_account() {
+    cat "$ACCOUNT_DIR/active-account" 2>/dev/null || echo "1"
+}
+
+setup_account_env() {
+    local account="${1:-$(get_active_account)}"
+    if [[ "$account" == "2" ]]; then
+        export CLAUDE_CONFIG_DIR="$HOME/.claude-account2"
+        if [[ ! -d "$CLAUDE_CONFIG_DIR" ]]; then
+            echo "Warning: Account 2 not configured. Run: CLAUDE_CONFIG_DIR=~/.claude-account2 claude login"
+        fi
+    fi
+}
+
 # Parse arguments
 RESUME_SESSION=""
 RESUME_QUERY=""
 INITIAL_PROMPT=""
 WORKING_DIR="$HOME"
 COORDINATOR_MODE=""
+ACCOUNT_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -29,6 +46,10 @@ while [[ $# -gt 0 ]]; do
             COORDINATOR_MODE="true"
             shift
             ;;
+        --account)
+            ACCOUNT_OVERRIDE="$2"
+            shift 2
+            ;;
         *)
             if [[ -z "$INITIAL_PROMPT" ]]; then
                 INITIAL_PROMPT="$1"
@@ -43,32 +64,47 @@ done
 SESSIONS_DIR="$SCRIPT_DIR/sessions"
 mkdir -p "$SESSIONS_DIR"
 
-# Determine session name
-if [[ "$COORDINATOR_MODE" == "true" ]]; then
-    # Coordinator is always claude-0
-    SESSION_NAME="claude-0"
+# Determine active account FIRST (needed for session naming)
+setup_account_env "$ACCOUNT_OVERRIDE"
+ACTIVE_ACCOUNT="${ACCOUNT_OVERRIDE:-$(get_active_account)}"
+ACCOUNT_SUFFIX="-acc${ACTIVE_ACCOUNT}"
 
-    # Check if already running
+# Determine session name (now includes account suffix)
+if [[ "$COORDINATOR_MODE" == "true" ]]; then
+    # Coordinator: claude-0-accN
+    SESSION_NAME="claude-0${ACCOUNT_SUFFIX}"
+
+    # Check if already running (any account)
     if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-        echo "Coordinator claude-0 already running"
+        echo "Coordinator $SESSION_NAME already running"
         exit 0
     fi
 else
     # Find next available session number (start from 1, 0 is reserved for coordinator)
+    # Check both accounts to avoid number collisions in tmux ls output
     SESSION_NUM=1
-    while [[ -f "$SESSIONS_DIR/claude-$SESSION_NUM" ]] && tmux has-session -t "claude-$SESSION_NUM" 2>/dev/null; do
-        SESSION_NUM=$((SESSION_NUM + 1))
+    while true; do
+        # Check if session exists with current account suffix
+        if tmux has-session -t "claude-${SESSION_NUM}${ACCOUNT_SUFFIX}" 2>/dev/null; then
+            SESSION_NUM=$((SESSION_NUM + 1))
+        else
+            break
+        fi
         if [[ $SESSION_NUM -gt $MAX_SESSIONS ]]; then
             echo "Error: Maximum sessions ($MAX_SESSIONS) reached"
             "$SCRIPT_DIR/notify.sh" "error" "system" "Max sessions reached ($MAX_SESSIONS)"
             exit 1
         fi
     done
-    SESSION_NAME="claude-$SESSION_NUM"
+    SESSION_NAME="claude-${SESSION_NUM}${ACCOUNT_SUFFIX}"
 fi
 
-# Create tmux session
-tmux new-session -d -s "$SESSION_NAME" -c "$WORKING_DIR"
+# Create tmux session with account environment
+if [[ "$ACTIVE_ACCOUNT" == "2" ]]; then
+    tmux new-session -d -s "$SESSION_NAME" -c "$WORKING_DIR" -e "CLAUDE_CONFIG_DIR=$HOME/.claude-account2"
+else
+    tmux new-session -d -s "$SESSION_NAME" -c "$WORKING_DIR"
+fi
 
 # Start Claude - coordinator, resuming, or fresh
 if [[ "$COORDINATOR_MODE" == "true" ]]; then
@@ -100,7 +136,8 @@ if [[ "$COORDINATOR_MODE" == "true" ]]; then
   "name": "$SESSION_NAME",
   "started": "$(date -Iseconds)",
   "cwd": "$WORKING_DIR",
-  "role": "coordinator"
+  "role": "coordinator",
+  "account": $ACTIVE_ACCOUNT
 }
 EOF
 elif [[ -n "$RESUME_SESSION" ]]; then
@@ -110,7 +147,8 @@ elif [[ -n "$RESUME_SESSION" ]]; then
   "started": "$(date -Iseconds)",
   "cwd": "$WORKING_DIR",
   "resumed_from": "$RESUME_SESSION",
-  "resume_query": "$RESUME_QUERY"
+  "resume_query": "$RESUME_QUERY",
+  "account": $ACTIVE_ACCOUNT
 }
 EOF
 else
@@ -118,7 +156,10 @@ else
 {
   "name": "$SESSION_NAME",
   "started": "$(date -Iseconds)",
-  "cwd": "$WORKING_DIR"
+  "cwd": "$WORKING_DIR",
+  "task": "${INITIAL_PROMPT:0:200}",
+  "status": "active",
+  "account": $ACTIVE_ACCOUNT
 }
 EOF
 fi

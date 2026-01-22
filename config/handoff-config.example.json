@@ -1,0 +1,7 @@
+{
+  "auto_respawn": true,
+  "threshold_percent": 50,
+  "handoff_wait_seconds": 120,
+  "notify_orchestrator": true,
+  "excluded_sessions": []
+}
