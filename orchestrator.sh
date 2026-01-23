@@ -551,24 +551,30 @@ get_status() {
             local context_pct=$(echo "$full_output" | grep -oE "[0-9]+% \([0-9]+k\)" | tail -1)
             local pct_num=$(echo "$context_pct" | grep -oE "^[0-9]+" || echo "0")
 
-            # Determine account from session name or env
+            # Determine account from env var FIRST, then fall back to session name
             local account=""
-            if [[ "$session_name" == *"-acc2"* ]]; then
+            local cfg=$(tmux show-environment -t "$session_name" CLAUDE_CONFIG_DIR 2>/dev/null | cut -d= -f2)
+            local is_acc2=false
+
+            # Check actual env var first (most reliable)
+            if [[ "$cfg" == *"account2"* ]]; then
+                is_acc2=true
+            # Fall back to session name pattern only if env confirms it
+            elif [[ "$session_name" == *"-acc2"* ]] && [[ -n "$cfg" ]] && [[ "$cfg" != "-CLAUDE_CONFIG_DIR" ]]; then
+                is_acc2=true
+            fi
+            # Note: if name says -acc2 but env not set, it's actually acc1 (bug in spawn)
+
+            # Set account label and count
+            if $is_acc2; then
                 account="②"
                 acc2_count=$((acc2_count + 1))
             elif echo "$full_output" | grep -q "extra usage"; then
                 account="①⚠"
                 acc1_count=$((acc1_count + 1))
             else
-                # Check tmux env
-                local cfg=$(tmux show-environment -t "$session_name" CLAUDE_CONFIG_DIR 2>/dev/null | cut -d= -f2)
-                if [[ "$cfg" == *"account2"* ]]; then
-                    account="②"
-                    acc2_count=$((acc2_count + 1))
-                else
-                    account="①"
-                    acc1_count=$((acc1_count + 1))
-                fi
+                account="①"
+                acc1_count=$((acc1_count + 1))
             fi
 
             # Detect state
