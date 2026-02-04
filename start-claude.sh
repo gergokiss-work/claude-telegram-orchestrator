@@ -24,6 +24,12 @@ setup_account_env() {
     fi
 }
 
+# Exact session name check (tmux has-session does prefix matching which causes bugs)
+session_exists() {
+    local name="$1"
+    tmux list-sessions -F "#{session_name}" 2>/dev/null | grep -qx "$name"
+}
+
 # Parse arguments
 RESUME_SESSION=""
 RESUME_QUERY=""
@@ -67,15 +73,21 @@ mkdir -p "$SESSIONS_DIR"
 # Determine active account FIRST (needed for session naming)
 setup_account_env "$ACCOUNT_OVERRIDE"
 ACTIVE_ACCOUNT="${ACCOUNT_OVERRIDE:-$(get_active_account)}"
-ACCOUNT_SUFFIX="-acc${ACTIVE_ACCOUNT}"
+
+# Account 1 = no suffix (default), Account 2 = -acc2 suffix
+if [[ "$ACTIVE_ACCOUNT" == "2" ]]; then
+    ACCOUNT_SUFFIX="-acc2"
+else
+    ACCOUNT_SUFFIX=""  # Account 1 has no suffix
+fi
 
 # Determine session name (now includes account suffix)
 if [[ "$COORDINATOR_MODE" == "true" ]]; then
     # Coordinator: claude-0-accN
     SESSION_NAME="claude-0${ACCOUNT_SUFFIX}"
 
-    # Check if already running (any account)
-    if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    # Check if already running (exact match)
+    if session_exists "$SESSION_NAME"; then
         echo "Coordinator $SESSION_NAME already running"
         exit 0
     fi
@@ -84,8 +96,8 @@ else
     # Check both accounts to avoid number collisions in tmux ls output
     SESSION_NUM=1
     while true; do
-        # Check if session exists with current account suffix
-        if tmux has-session -t "claude-${SESSION_NUM}${ACCOUNT_SUFFIX}" 2>/dev/null; then
+        # Check if session exists with current account suffix (exact match)
+        if session_exists "claude-${SESSION_NUM}${ACCOUNT_SUFFIX}"; then
             SESSION_NUM=$((SESSION_NUM + 1))
         else
             break

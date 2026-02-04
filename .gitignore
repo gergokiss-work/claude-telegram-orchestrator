@@ -26,3 +26,4 @@ temp/
 # Logs
 *.log
 images/
+worker-state/

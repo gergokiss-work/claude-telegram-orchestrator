@@ -1129,6 +1129,12 @@ log "Polling Telegram every ${POLL_INTERVAL}s"
 # Start coordinator on boot
 ensure_coordinator
 
+# Start Clawdbot lobby session if not running
+if ! tmux has-session -t "lobby" 2>/dev/null; then
+    log "Starting Clawdbot lobby session..."
+    "$SCRIPT_DIR/start-lobby.sh" 2>/dev/null || true
+fi
+
 # Log rotation tracking
 LAST_LOG_ROTATION=$(date +%s)
 LOG_ROTATION_INTERVAL=3600  # Every hour
