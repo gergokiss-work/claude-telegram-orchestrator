@@ -1,7 +1,8 @@
 {
   "auto_respawn": true,
-  "threshold_percent": 50,
-  "handoff_wait_seconds": 120,
+  "threshold_percent": 60,
+  "handoff_wait_seconds": 300,
   "notify_orchestrator": true,
-  "excluded_sessions": []
+  "excluded_sessions": [],
+  "context_watch": false
 }

@@ -433,7 +433,7 @@ Located at `~/.claude/handoff-config.json`:
 {
   "auto_respawn": true,
   "threshold_percent": 60,
-  "handoff_wait_seconds": 240,
+  "handoff_wait_seconds": 300,
   "notify_orchestrator": true,
   "excluded_sessions": ["backend", "frontend"]
 }
