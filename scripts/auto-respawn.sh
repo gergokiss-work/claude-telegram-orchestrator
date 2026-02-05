@@ -65,25 +65,34 @@ HANDOFF_FILE=""
 WAITED=0
 
 while [ $WAITED -lt $WAIT_SECONDS ]; do
-    # Look for handoff files and check their FILENAME timestamp (not file mod time)
+    # Look for handoff files - check BOTH filename timestamp AND file modification time
     for FILE in "$HANDOFF_DIR"/${SESSION}-*.md; do
         [ -f "$FILE" ] || continue
-        # Extract timestamp from filename: claude-1-2026-02-05-1435.md -> 2026-02-05-1435
+
+        # Method 1: Check filename timestamp
         FNAME=$(basename "$FILE" .md)
         FILE_TS=$(echo "$FNAME" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}$')
+        FILENAME_VALID=false
         if [ -n "$FILE_TS" ]; then
-            # Convert filename timestamp to epoch for comparison
-            # Format: 2026-02-05-1435 -> 2026-02-05 14:35
             FILE_DATE=$(echo "$FILE_TS" | sed 's/-\([0-9]\{4\}\)$/ \1/' | sed 's/\(..\)$/:\1/')
             FILE_EPOCH=$(date -j -f "%Y-%m-%d %H:%M" "$FILE_DATE" +%s 2>/dev/null || echo "0")
-
-            # Accept if file timestamp is within 60 seconds BEFORE trigger or any time AFTER
             TIME_DIFF=$((FILE_EPOCH - TRIGGER_EPOCH))
-            if [ $TIME_DIFF -ge -60 ]; then
-                HANDOFF_FILE="$FILE"
-                log "Handoff file found: $HANDOFF_FILE (timestamp: $FILE_TS)"
-                break 2
-            fi
+            # Accept if filename timestamp is within 60s before trigger or after
+            [ $TIME_DIFF -ge -60 ] && FILENAME_VALID=true
+        fi
+
+        # Method 2: Check file modification time (for updated existing handoffs)
+        MOD_EPOCH=$(stat -f %m "$FILE" 2>/dev/null || echo "0")
+        MOD_AGE=$((TRIGGER_EPOCH - MOD_EPOCH))
+        # Accept if file was modified within 5 minutes (300s) of trigger
+        MODTIME_VALID=false
+        [ $MOD_AGE -le 300 ] && [ $MOD_AGE -ge -60 ] && MODTIME_VALID=true
+
+        # Accept if EITHER condition is met
+        if [ "$FILENAME_VALID" = true ] || [ "$MODTIME_VALID" = true ]; then
+            HANDOFF_FILE="$FILE"
+            log "Handoff file found: $HANDOFF_FILE (filename_ts: $FILE_TS, mod_age: ${MOD_AGE}s)"
+            break 2
         fi
     done
     sleep 10
