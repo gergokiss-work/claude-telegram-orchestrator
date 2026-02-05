@@ -46,33 +46,46 @@ log "=== AUTO-RESPAWN TRIGGERED for $SESSION at ${PERCENT}% ==="
 
 # Step 1: Inject handoff prompt and wait for completion
 log "Step 1: Injecting handoff prompt to $SESSION"
-HANDOFF_PROMPT=$(cat "$HOME/.claude/handoff-prompt.md")
 "$INJECT_SCRIPT" "$SESSION" "🚨 **AUTO-RESPAWN TRIGGERED at ${PERCENT}%**
 
-$HANDOFF_PROMPT
+Finalize your handoff file NOW:
+1. Add final progress entry to your handoff file
+2. Fill the 'Continuation Prompt' section
+3. File should already exist from session start - just complete it
 
-⚠️ **IMPORTANT:** Auto-respawn is ENABLED. After you save the handoff file, this session will be automatically killed and a fresh instance will continue your work.
+If no handoff file exists, create one: ~/.claude/handoffs/${SESSION}-\$(date '+%Y-%m-%d-%H%M').md
 
-You have ${WAIT_SECONDS} seconds to complete the handoff summary." 2>/dev/null
+You have ${WAIT_SECONDS} seconds." 2>/dev/null
 
 # Step 2: Wait for handoff file to appear
 log "Step 2: Waiting up to ${WAIT_SECONDS}s for handoff file..."
-TIMESTAMP_START=$(date '+%Y-%m-%d-%H%M')
+TRIGGER_TIME=$(date '+%Y-%m-%d-%H%M')
+TRIGGER_EPOCH=$(date +%s)
 HANDOFF_FILE=""
 WAITED=0
 
 while [ $WAITED -lt $WAIT_SECONDS ]; do
-    # Look for handoff file created after we started
-    LATEST=$(ls -t "$HANDOFF_DIR"/${SESSION}-*.md 2>/dev/null | head -1)
-    if [ -n "$LATEST" ] && [ -f "$LATEST" ]; then
-        # Check if file was created recently (within last 3 minutes)
-        FILE_AGE=$(( $(date +%s) - $(stat -f %m "$LATEST") ))
-        if [ $FILE_AGE -lt 180 ]; then
-            HANDOFF_FILE="$LATEST"
-            log "Handoff file found: $HANDOFF_FILE"
-            break
+    # Look for handoff files and check their FILENAME timestamp (not file mod time)
+    for FILE in "$HANDOFF_DIR"/${SESSION}-*.md; do
+        [ -f "$FILE" ] || continue
+        # Extract timestamp from filename: claude-1-2026-02-05-1435.md -> 2026-02-05-1435
+        FNAME=$(basename "$FILE" .md)
+        FILE_TS=$(echo "$FNAME" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}$')
+        if [ -n "$FILE_TS" ]; then
+            # Convert filename timestamp to epoch for comparison
+            # Format: 2026-02-05-1435 -> 2026-02-05 14:35
+            FILE_DATE=$(echo "$FILE_TS" | sed 's/-\([0-9]\{4\}\)$/ \1/' | sed 's/\(..\)$/:\1/')
+            FILE_EPOCH=$(date -j -f "%Y-%m-%d %H:%M" "$FILE_DATE" +%s 2>/dev/null || echo "0")
+
+            # Accept if file timestamp is within 60 seconds BEFORE trigger or any time AFTER
+            TIME_DIFF=$((FILE_EPOCH - TRIGGER_EPOCH))
+            if [ $TIME_DIFF -ge -60 ]; then
+                HANDOFF_FILE="$FILE"
+                log "Handoff file found: $HANDOFF_FILE (timestamp: $FILE_TS)"
+                break 2
+            fi
         fi
-    fi
+    done
     sleep 10
     WAITED=$((WAITED + 10))
     log "  Waiting... ${WAITED}s / ${WAIT_SECONDS}s"
@@ -111,8 +124,38 @@ fi
 # Step 6: Start fresh session
 log "Step 5: Starting fresh $SESSION in $WORKING_DIR"
 cd "$WORKING_DIR"
-tmux new-session -d -s "$SESSION" "claude --dangerously-skip-permissions"
+# Detect account suffix and set config dir
+if [[ "$SESSION" == *-acc2 ]]; then
+    tmux new-session -d -s "$SESSION" -e "CLAUDE_CONFIG_DIR=$HOME/.claude-account2" "claude --dangerously-skip-permissions"
+else
+    tmux new-session -d -s "$SESSION" "claude --dangerously-skip-permissions"
+fi
 sleep 4
+
+# Step 6.5: Check for active task file (ralph-task.sh integration)
+TASK_FILE="$HANDOFF_DIR/${SESSION}-task.md"
+TASK_SECTION=""
+if [ -f "$TASK_FILE" ]; then
+    TASK_NAME=$(head -1 "$TASK_FILE" | sed 's/^# Task: //')
+    TASK_PROGRESS=$(grep -cE "^\s*- \[x\]" "$TASK_FILE" 2>/dev/null || echo "0")
+    TASK_TOTAL=$(grep -cE "^\s*- \[[ x]\]" "$TASK_FILE" 2>/dev/null || echo "0")
+    log "Active task found: $TASK_NAME ($TASK_PROGRESS/$TASK_TOTAL complete)"
+    TASK_SECTION="
+## 🎯 ACTIVE TASK (ralph-task.sh)
+
+You have an active task file: \`$TASK_FILE\`
+**Task:** $TASK_NAME
+**Progress:** $TASK_PROGRESS/$TASK_TOTAL checkboxes complete
+
+Read your task file FIRST:
+\`\`\`bash
+cat $TASK_FILE
+\`\`\`
+
+Continue working on this task. Update checkboxes as you complete them.
+When ALL done, set EXIT_SIGNAL: true in the task file.
+"
+fi
 
 # Step 7: Inject continuation prompt
 log "Step 6: Injecting continuation prompt"
@@ -128,7 +171,7 @@ cat $HANDOFF_FILE
 
 ## Your Continuation
 $CONTINUATION
-
+$TASK_SECTION
 ## Context Awareness (CRITICAL)
 **Threshold is 50%.** Check context BEFORE starting each new task:
 \`\`\`bash
@@ -140,17 +183,23 @@ $CONTINUATION
 - **40-49%:** Only start small tasks, consider if next task fits
 - **>=50%:** Do NOT start new tasks - complete current work and hand off
 
-Before each TODO item, run the check. If at/near threshold:
-1. Mark remaining TODOs as \"not started\" in your summary
-2. Write handoff immediately (don't wait for auto-trigger)
-3. Save to: \`~/.claude/handoffs/\$(tmux display-message -p '#S')-\$(date '+%Y-%m-%d-%H%M').md\`
+## 📝 HANDOFF PROTOCOL
+
+**FIRST:** Read previous handoff, then create YOUR handoff file immediately:
+\`\`\`bash
+SESSION=\$(tmux display-message -p '#S')
+TIMESTAMP=\$(date '+%Y-%m-%d-%H%M')
+# Create: ~/.claude/handoffs/\${SESSION}-\${TIMESTAMP}.md
+\`\`\`
+
+**AS YOU WORK:** Add timestamped entries to Progress Log
+**AT THRESHOLD:** Fill Continuation Prompt section - file is already complete
 
 ## Reporting
 - Telegram: \`~/.claude/telegram-orchestrator/send-summary.sh --session \$(tmux display-message -p '#S') \"msg\"\`
 - TTS: \`~/.claude/scripts/tts-write.sh \"msg\"\`
-- System time: \`date '+%Y-%m-%d %H:%M:%S'\`
 
-**Start by reading the handoff, then continue your work.**" 2>/dev/null
+**Start now: 1) Read handoff, 2) Create your handoff file, 3) Work.**" 2>/dev/null
 
 # Step 8: Notify orchestrator
 if [ "$NOTIFY_ORCH" = "true" ] && [ "$SESSION" != "claude-0" ]; then
@@ -173,6 +222,38 @@ fi
 
 📁 <b>Handoff:</b> $(basename $HANDOFF_FILE)
 💡 <i>Continuing autonomously</i>" 2>/dev/null
+
+# Step 10: Check if ralph-worker was running and restart it
+WORKER_STATE_DIR="$HOME/.claude/telegram-orchestrator/worker-state/$SESSION"
+WORKER_STATE_FILE="$WORKER_STATE_DIR/state.json"
+if [ -f "$WORKER_STATE_FILE" ]; then
+    WORKER_STATUS=$(jq -r '.status // "unknown"' "$WORKER_STATE_FILE" 2>/dev/null)
+    if [ "$WORKER_STATUS" = "running" ]; then
+        log "Step 10: Restarting ralph-worker"
+        WORKER_TASK=$(jq -r '.task_file // ""' "$WORKER_STATE_FILE" 2>/dev/null)
+        WORKER_LOOPS=$(jq -r '.loop_count // 0' "$WORKER_STATE_FILE" 2>/dev/null)
+        MAX_LOOPS=$((100 - WORKER_LOOPS))  # Resume with remaining loops
+
+        if [ -n "$WORKER_TASK" ] && [ -f "$WORKER_TASK" ] && [ $MAX_LOOPS -gt 0 ]; then
+            # Reset worker state for fresh start
+            jq '.status = "restarting" | .loop_count = '"$WORKER_LOOPS"'' "$WORKER_STATE_FILE" > "${WORKER_STATE_FILE}.tmp" && mv "${WORKER_STATE_FILE}.tmp" "$WORKER_STATE_FILE"
+
+            # Wait for session to be ready
+            sleep 5
+
+            # Restart worker in background
+            nohup ~/.claude/telegram-orchestrator/ralph-worker.sh "$SESSION" --task-file "$WORKER_TASK" --max-loops "$MAX_LOOPS" >> "$WORKER_STATE_DIR/worker.log" 2>&1 &
+            log "Ralph-worker restarted with $MAX_LOOPS remaining loops"
+
+            ~/.claude/telegram-orchestrator/send-summary.sh --session "$SESSION" "🔄 <b>RALPH Worker Restarted</b>
+
+<b>Session:</b> $SESSION
+<b>Previous Loops:</b> $WORKER_LOOPS
+<b>Remaining:</b> $MAX_LOOPS
+Worker continuing after auto-respawn." 2>/dev/null
+        fi
+    fi
+fi
 
 # Clear the trigger flag for the new session
 rm -f "$HANDOFF_DIR/.triggered-$SESSION"
