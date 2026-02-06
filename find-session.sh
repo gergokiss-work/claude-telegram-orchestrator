@@ -150,7 +150,7 @@ response=$(curl -s "https://api.anthropic.com/v1/messages" \
     -H "x-api-key: $ANTHROPIC_API_KEY" \
     -H "anthropic-version: 2023-06-01" \
     -d "{
-        \"model\": \"claude-3-5-haiku-20241022\",
+        \"model\": \"claude-haiku-4-5-20251001\",
         \"max_tokens\": 100,
         \"messages\": [{
             \"role\": \"user\",

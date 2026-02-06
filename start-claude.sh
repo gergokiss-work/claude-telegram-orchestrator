@@ -71,8 +71,17 @@ SESSIONS_DIR="$SCRIPT_DIR/sessions"
 mkdir -p "$SESSIONS_DIR"
 
 # Determine active account FIRST (needed for session naming)
-setup_account_env "$ACCOUNT_OVERRIDE"
-ACTIVE_ACCOUNT="${ACCOUNT_OVERRIDE:-$(get_active_account)}"
+# If no override, use smart-rotate for intelligent selection; fall back to active-account file
+SMART_ROTATE="$HOME/.claude/account-manager/smart-rotate.sh"
+if [[ -n "$ACCOUNT_OVERRIDE" ]]; then
+    ACTIVE_ACCOUNT="$ACCOUNT_OVERRIDE"
+elif [[ -x "$SMART_ROTATE" ]]; then
+    ACTIVE_ACCOUNT=$("$SMART_ROTATE" account-number 2>/dev/null)
+    [[ -z "$ACTIVE_ACCOUNT" ]] && ACTIVE_ACCOUNT=$(get_active_account)
+else
+    ACTIVE_ACCOUNT=$(get_active_account)
+fi
+setup_account_env "$ACTIVE_ACCOUNT"
 
 # Account 1 = no suffix (default), Account 2 = -acc2 suffix
 if [[ "$ACTIVE_ACCOUNT" == "2" ]]; then
@@ -117,6 +126,9 @@ if [[ "$ACTIVE_ACCOUNT" == "2" ]]; then
 else
     tmux new-session -d -s "$SESSION_NAME" -c "$WORKING_DIR"
 fi
+
+# Enable session logging (defense-in-depth, also handled by tmux session-created hook)
+tmux pipe-pane -t "$SESSION_NAME" "exec $HOME/.claude/scripts/tmux-log-pipe.sh '$SESSION_NAME'" 2>/dev/null || true
 
 # Start Claude - coordinator, resuming, or fresh
 if [[ "$COORDINATOR_MODE" == "true" ]]; then

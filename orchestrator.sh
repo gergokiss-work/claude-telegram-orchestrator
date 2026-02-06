@@ -672,6 +672,20 @@ $status_msg"
     echo "$status_msg"
 }
 
+# Sanitize user input from Telegram before injecting into tmux sessions
+# Removes shell metacharacters that could be exploited via tmux paste
+sanitize_telegram_input() {
+    local input="$1"
+    # Remove backticks (command substitution)
+    input=$(printf '%s' "$input" | sed 's/`//g')
+    # Remove $() command substitution (precise: $ immediately followed by parenthesis)
+    input=$(printf '%s' "$input" | sed 's/\$(//g')
+    # Remove ${} variable expansion (precise: $ immediately followed by brace)
+    input=$(printf '%s' "$input" | sed 's/\${[^}]*}//g')
+    # Limit length to prevent buffer issues (4000 chars = Telegram max)
+    printf '%s' "${input:0:4000}"
+}
+
 inject_input() {
     local session="$1"
     local input="$2"
@@ -686,8 +700,9 @@ inject_input() {
             return 1
         fi
 
-        # Append summary instruction
+        # Sanitize and append summary instruction
         if [[ "$from_telegram" == "true" ]]; then
+            input=$(sanitize_telegram_input "$input")
             input="$input
 <tg>send-summary.sh</tg>"
         fi
@@ -712,8 +727,9 @@ cat ~/.claude/telegram-orchestrator/sessions/${session}.queue"
         return 1
     fi
 
-    # Append summary instruction for Telegram messages (subtle, at end)
+    # Sanitize input from Telegram to prevent shell injection via tmux
     if [[ "$from_telegram" == "true" ]]; then
+        input=$(sanitize_telegram_input "$input")
         input="$input
 <tg>send-summary.sh</tg>"
     fi
