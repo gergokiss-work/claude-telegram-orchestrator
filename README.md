@@ -11,6 +11,12 @@ Control multiple Claude Code sessions from your phone via Telegram. Send text or
 - **Watchdog** - Auto-fixes stuck sessions, sends reminders
 - **Multi-account support** - Switch between Claude accounts to avoid rate limits
 - **Context-aware auto-respawn** - Sessions auto-handoff at configurable threshold
+- **Input sanitization** - Strips shell metacharacters from Telegram input before tmux injection
+- **tmux session logging** - All sessions auto-logged to files, searchable by any Claude instance
+- **Restart all sessions** - Graceful restart with handoff continuity (new version, crashes, shutdown)
+- **Smart account rotation** - Intelligent account selection based on usage tracking
+- **TTS priority queue** - Priority-aware text-to-speech notifications
+- **Handoff action logging** - Auto-categorized progress tracking in handoff files
 
 ## Architecture
 
@@ -223,9 +229,9 @@ touch ~/.claude/telegram-orchestrator/enabled
 ```
 ~/.claude/telegram-orchestrator/
 ├── orchestrator.sh          # Main daemon - polls Telegram, routes messages
-├── start-claude.sh          # Creates new Claude tmux sessions
+├── start-claude.sh          # Creates new Claude tmux sessions (smart-rotate accounts)
 ├── send-summary.sh          # Sends formatted messages to Telegram
-├── inject-prompt.sh         # Injects prompts into sessions
+├── inject-prompt.sh         # Injects prompts into sessions (buffer-based)
 ├── notify.sh                # Send notifications
 ├── find-session.sh          # Search past sessions by keyword
 ├── watchdog.sh              # Monitor and fix stuck sessions
@@ -233,6 +239,13 @@ touch ~/.claude/telegram-orchestrator/enabled
 ├── ralph-worker.sh          # Autonomous task loop worker
 ├── ralph-status.sh          # Show RALPH worker status
 ├── start-lobby.sh           # Start Clawdbot lobby session
+│
+├── scripts/                 # Utility scripts
+│   ├── auto-respawn.sh      # Context-aware session respawn with Agent Teams detection
+│   ├── auto-respawn-toggle.sh # Enable/disable auto-respawn
+│   ├── restart-all.sh       # Graceful restart all sessions (5 modes)
+│   ├── check-context.sh     # Check context % for a session
+│   └── trigger-handoff.sh   # Manual handoff trigger
 │
 ├── lib/                     # RALPH library modules
 │   ├── circuit_breaker.sh   # 3-state circuit breaker
@@ -255,6 +268,11 @@ touch ~/.claude/telegram-orchestrator/enabled
 ├── logs/                    # Runtime logs
 ├── watchdog-state/          # Watchdog state files
 └── worker-state/            # RALPH worker state files
+
+~/.claude/logs/tmux/         # Auto-generated tmux session logs
+├── claude-0_2026-02-06-1200.log
+├── claude-1_2026-02-06-1205.log
+└── ...
 ```
 
 ## Watchdog
@@ -372,6 +390,183 @@ The watchdog automatically detects rate limits and can migrate sessions:
 - Monitors for "You've hit your limit" messages
 - Detects usage percentage warnings
 - Auto-migrates at 95%+ usage (if configured)
+
+## Input Sanitization
+
+All Telegram input is sanitized before being injected into tmux sessions. Shell metacharacters are stripped to prevent command injection through Telegram messages.
+
+**Sanitized characters:** `` ` `` `$` `(` `)` `|` `;` `&` `>` `<` `\`
+
+This runs automatically in `orchestrator.sh` before any message reaches a session.
+
+## tmux Session Logging
+
+Every tmux session is automatically logged to disk with ANSI escape sequences stripped. Logs are searchable by any Claude instance.
+
+### How It Works
+
+1. A `session-created` hook in `~/.tmux.conf` starts `pipe-pane` for every new session
+2. `start-claude.sh` also enables logging as defense-in-depth
+3. Output flows through `tmux-log-pipe.sh` which strips ANSI codes via perl
+4. Clean text is written to `~/.claude/logs/tmux/{session}_{YYYY-MM-DD-HHMM}.log`
+
+### Log File Naming
+
+Each session lifetime gets its own file: `{session}_{YYYY-MM-DD-HHMM}.log`
+
+When a session is restarted, a new file is created with a new timestamp. This means you can see the full history of a session across restarts.
+
+### Querying Logs
+
+Use `tmux-log.sh` to search, tail, and clip logs:
+
+```bash
+# Search all sessions for a keyword
+~/.claude/scripts/tmux-log.sh search "authentication"
+
+# Search a specific session
+~/.claude/scripts/tmux-log.sh search "error" --session claude-3
+
+# Tail live output
+~/.claude/scripts/tmux-log.sh tail claude-1
+
+# Copy last 50 lines to clipboard
+~/.claude/scripts/tmux-log.sh clip claude-1 50
+
+# List all log files
+~/.claude/scripts/tmux-log.sh list
+
+# Check logging status
+~/.claude/scripts/tmux-log.sh status
+
+# Enable logging for a session that missed the hook
+~/.claude/scripts/tmux-log.sh enable claude-5
+```
+
+### Log Retention
+
+`tmux-log-cleanup.sh` deletes logs older than 7 days. Can be added to cron:
+
+```bash
+0 3 * * * ~/.claude/scripts/tmux-log-cleanup.sh
+```
+
+## Restart All Sessions
+
+Gracefully restart all Claude sessions with handoff continuity. Handles: new Claude Code versions, config changes, mass crashes, Mac shutdown/restart.
+
+### Usage
+
+```bash
+~/.claude/scripts/restart-all.sh [MODE] [OPTIONS]
+```
+
+### Modes
+
+| Mode | Behavior |
+|------|----------|
+| `--graceful` (default) | Inject handoff request, wait, kill, restart with continuity |
+| `--force` | Kill all immediately, restart with best-effort recent handoffs |
+| `--shutdown` | Handoff + kill (no restart), save state file for `--resume` |
+| `--resume` | Read saved state file, restart all sessions with saved handoffs |
+| `--status` | Show all sessions: state, account, context %, latest handoff |
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--timeout <seconds>` | Override handoff wait timeout (default from config) |
+| `--reason <text>` | Reason included in injected prompts and notifications |
+| `--dry-run` | Show what would happen without executing |
+
+### Examples
+
+```bash
+# Preview what would happen
+restart-all.sh --dry-run
+
+# Check session states
+restart-all.sh --status
+
+# Graceful restart for Claude Code update
+restart-all.sh --reason "Claude Code update"
+
+# Emergency restart (skip handoff wait)
+restart-all.sh --force --reason "mass crash"
+
+# Shutdown before Mac restart, resume after
+restart-all.sh --shutdown --reason "Mac update"
+# ... after reboot ...
+restart-all.sh --resume
+```
+
+### Graceful Flow
+
+```
+1. Discover sessions (tmux list-sessions, filter claude-*, skip excluded)
+2. Capture working directories while sessions alive
+3. Inject handoff request to ALL workers in PARALLEL
+4. 5s delay, then inject to coordinator (claude-0)
+5. Wait for handoff files (poll 10s, dual validation)
+6. Kill workers first, then coordinator
+7. Restart coordinator FIRST, then workers (staggered 2s)
+8. Inject continuation prompt from handoff
+9. Re-enable tmux pipe-pane logging
+10. Send Telegram + TTS notifications
+```
+
+### Key Behaviors
+
+- **Coordinator ordering** — claude-0 is killed last and restarted first (it receives notifications from other sessions)
+- **Account-aware** — sessions with `-acc2` suffix restart with `CLAUDE_CONFIG_DIR=~/.claude-account2`
+- **Crashed session handling** — detects crashed sessions via pane content, skips handoff injection, still restarts
+- **Agent Teams** — extends timeout to 600s if active teammates are detected
+- **State file** — `--shutdown` saves session list + handoff paths to `~/.claude/restart-state.json` for later `--resume`
+- **RALPH integration** — includes active task file info in continuation prompt if present
+- **Excluded sessions** — respects `excluded_sessions` from `~/.claude/handoff-config.json`
+
+## Smart Account Rotation
+
+When starting new sessions via `start-claude.sh`, the system tracks usage per account and selects the least-used one. This spreads load across multiple Claude accounts to minimize rate limiting.
+
+### How It Works
+
+1. Each session's account is recorded in `sessions/` directory
+2. `start-claude.sh` counts active sessions per account
+3. New sessions are assigned to the account with fewer active sessions
+4. Account 2 sessions get the `-acc2` suffix and `CLAUDE_CONFIG_DIR` env var
+
+## Auto-Respawn
+
+Sessions auto-handoff when context usage exceeds the configured threshold (default: 60%).
+
+### Flow
+
+1. `check-context.sh` detects context threshold exceeded
+2. `auto-respawn.sh` injects handoff request into the session
+3. Waits for handoff file (dual validation: filename timestamp OR file modification time)
+4. Kills old session, starts fresh one in same directory
+5. Injects continuation prompt extracted from handoff
+6. Restarts RALPH worker if one was running
+7. Notifies coordinator and Telegram
+
+### Agent Teams Protection
+
+If the session has active Agent Teams (detected via child process count, team lock file, or output keywords), the timeout extends to 600s and the session is asked to complete team work first.
+
+### Configuration
+
+Located at `~/.claude/handoff-config.json`:
+
+```json
+{
+  "auto_respawn": true,
+  "threshold_percent": 60,
+  "handoff_wait_seconds": 300,
+  "notify_orchestrator": true,
+  "excluded_sessions": ["backend", "frontend"]
+}
+```
 
 ## How Claude Sends Summaries
 
@@ -509,6 +704,46 @@ cat ~/.claude/telegram-orchestrator/watchdog-state/circuits/claude-5.history
 /ralph reset 5
 ```
 
-## License
+### tmux logging not working
 
-MIT
+```bash
+# Check if pipe-pane is active
+tmux show-options -g | grep pipe
+
+# Manually enable for a session
+~/.claude/scripts/tmux-log.sh enable claude-1
+
+# Check log directory
+ls -la ~/.claude/logs/tmux/
+
+# Verify hook is in tmux.conf
+grep session-created ~/.tmux.conf
+```
+
+### Restart all sessions
+
+```bash
+# Check state before restart
+~/.claude/scripts/restart-all.sh --status
+
+# Dry run first
+~/.claude/scripts/restart-all.sh --dry-run
+
+# If sessions are stuck after restart
+~/.claude/scripts/restart-all.sh --force --reason "cleanup"
+```
+
+### Auto-respawn not detecting handoff
+
+```bash
+# Check auto-respawn log
+tail -50 ~/.claude/handoffs/auto-respawn.log
+
+# Check handoff config
+cat ~/.claude/handoff-config.json
+
+# List recent handoff files
+ls -lt ~/.claude/handoffs/ | head -10
+```
+
+
