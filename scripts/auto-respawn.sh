@@ -44,9 +44,78 @@ fi
 
 log "=== AUTO-RESPAWN TRIGGERED for $SESSION at ${PERCENT}% ==="
 
+# Step 0: Check for active Agent Teams / child processes
+# Opus 4.6 Agent Teams spawns teammate subprocesses under the Claude Code process.
+# Killing the parent kills ALL teammates, destroying their work.
+TEAMMATE_DETECTED=false
+TEAM_LOCK_FILE="$HANDOFF_DIR/.team-active-$SESSION"
+
+# Method 1: Check for team lock file (agents write this when spawning teams)
+if [ -f "$TEAM_LOCK_FILE" ]; then
+    TEAMMATE_DETECTED=true
+    log "Team lock file found for $SESSION"
+fi
+
+# Method 2: Check child process count of Claude Code process
+PANE_PID=$(tmux list-panes -t "$SESSION" -F '#{pane_pid}' 2>/dev/null | head -1)
+if [ -n "$PANE_PID" ]; then
+    # Get the claude process (child of shell in tmux pane)
+    CLAUDE_PID=$(pgrep -P "$PANE_PID" -f "claude" 2>/dev/null | head -1)
+    if [ -n "$CLAUDE_PID" ]; then
+        CHILD_COUNT=$(pgrep -P "$CLAUDE_PID" 2>/dev/null | wc -l | tr -d ' ')
+        # Claude Code normally has 1-2 child processes (node workers).
+        # Agent Teams adds more. Threshold of 3+ indicates active teammates.
+        if [ "$CHILD_COUNT" -gt 2 ]; then
+            TEAMMATE_DETECTED=true
+            log "Multiple child processes ($CHILD_COUNT) detected under Claude PID $CLAUDE_PID - likely Agent Teams"
+        fi
+    fi
+fi
+
+# Method 3: Check tmux pane output for teammate indicators
+RECENT_OUTPUT=$(tmux capture-pane -t "$SESSION" -p -S -100 2>/dev/null)
+if echo "$RECENT_OUTPUT" | grep -qiE "teammate|team.?lead|peer.?message|spawning.*(agent|teammate)|Task tool.*subagent"; then
+    TEAMMATE_DETECTED=true
+    log "Teammate keywords detected in session output"
+fi
+
+if [ "$TEAMMATE_DETECTED" = true ]; then
+    log "Agent Teams active in $SESSION - extending timeout and requesting team completion"
+    EXTENDED_WAIT=600  # 10 minutes for team work to complete
+    WAIT_SECONDS=$EXTENDED_WAIT
+
+    # Inject team-aware handoff request
+    "$INJECT_SCRIPT" "$SESSION" "🚨 **AUTO-RESPAWN TRIGGERED at ${PERCENT}%** - Agent Teams detected!
+
+You have active teammates/subagents. Before respawning:
+1. Wait for all teammates to complete their work
+2. Collect and summarize teammate results
+3. Include teammate state in your handoff (what each was doing, their progress)
+4. Then create your handoff file
+
+You have ${WAIT_SECONDS} seconds (extended for team work)." 2>/dev/null
+
+    # Wait for team lock to be removed (agent removes it when teams finish)
+    TEAM_WAITED=0
+    while [ -f "$TEAM_LOCK_FILE" ] && [ $TEAM_WAITED -lt 300 ]; do
+        sleep 10
+        TEAM_WAITED=$((TEAM_WAITED + 10))
+        log "  Waiting for team lock release... ${TEAM_WAITED}s / 300s"
+    done
+    if [ -f "$TEAM_LOCK_FILE" ]; then
+        log "Team lock not released after 300s, proceeding with respawn anyway"
+        rm -f "$TEAM_LOCK_FILE"
+    fi
+else
+    # No teammates - proceed with standard handoff injection (Step 1 below)
+    true
+fi
+
 # Step 1: Inject handoff prompt and wait for completion
-log "Step 1: Injecting handoff prompt to $SESSION"
-"$INJECT_SCRIPT" "$SESSION" "🚨 **AUTO-RESPAWN TRIGGERED at ${PERCENT}%**
+# (Skip if already injected team-aware prompt above)
+if [ "$TEAMMATE_DETECTED" = false ]; then
+    log "Step 1: Injecting handoff prompt to $SESSION"
+    "$INJECT_SCRIPT" "$SESSION" "🚨 **AUTO-RESPAWN TRIGGERED at ${PERCENT}%**
 
 Finalize your handoff file NOW:
 1. Add final progress entry to your handoff file
@@ -56,6 +125,7 @@ Finalize your handoff file NOW:
 If no handoff file exists, create one: ~/.claude/handoffs/${SESSION}-\$(date '+%Y-%m-%d-%H%M').md
 
 You have ${WAIT_SECONDS} seconds." 2>/dev/null
+fi
 
 # Step 2: Wait for handoff file to appear
 log "Step 2: Waiting up to ${WAIT_SECONDS}s for handoff file..."
@@ -99,6 +169,31 @@ while [ $WAITED -lt $WAIT_SECONDS ]; do
     WAITED=$((WAITED + 10))
     log "  Waiting... ${WAITED}s / ${WAIT_SECONDS}s"
 done
+
+# Final scan after timeout — fixes race condition where file appears during last sleep
+if [ -z "$HANDOFF_FILE" ]; then
+    for FILE in "$HANDOFF_DIR"/${SESSION}-*.md; do
+        [ -f "$FILE" ] || continue
+        FNAME=$(basename "$FILE" .md)
+        FILE_TS=$(echo "$FNAME" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}$')
+        FILENAME_VALID=false
+        if [ -n "$FILE_TS" ]; then
+            FILE_DATE=$(echo "$FILE_TS" | sed 's/-\([0-9]\{4\}\)$/ \1/' | sed 's/\(..\)$/:\1/')
+            FILE_EPOCH=$(date -j -f "%Y-%m-%d %H:%M" "$FILE_DATE" +%s 2>/dev/null || echo "0")
+            TIME_DIFF=$((FILE_EPOCH - TRIGGER_EPOCH))
+            [ $TIME_DIFF -ge -60 ] && FILENAME_VALID=true
+        fi
+        MOD_EPOCH=$(stat -f %m "$FILE" 2>/dev/null || echo "0")
+        MOD_AGE=$((TRIGGER_EPOCH - MOD_EPOCH))
+        MODTIME_VALID=false
+        [ $MOD_AGE -le 300 ] && [ $MOD_AGE -ge -60 ] && MODTIME_VALID=true
+        if [ "$FILENAME_VALID" = true ] || [ "$MODTIME_VALID" = true ]; then
+            HANDOFF_FILE="$FILE"
+            log "Handoff file found on final scan: $HANDOFF_FILE"
+            break
+        fi
+    done
+fi
 
 if [ -z "$HANDOFF_FILE" ]; then
     log "ERROR: No handoff file created within timeout. Aborting auto-respawn."
