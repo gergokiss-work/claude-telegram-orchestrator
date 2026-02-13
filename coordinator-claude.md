@@ -112,6 +112,38 @@ You (claude-0) - Always running, coordinator
 - Routing decisions
 - Simple tasks that don't need a dedicated session
 
+## Session Recovery (CRITICAL - Follow This Exactly)
+
+When a session dies, crashes, or needs to be restarted, NEVER wing it. Use the recovery script:
+
+```bash
+# Step 1: See what data exists for the session (dry run)
+~/.claude/scripts/recover-session.sh claude-N
+
+# Step 2: If it looks correct, start and inject automatically
+~/.claude/scripts/recover-session.sh claude-N --start
+```
+
+The script checks ALL sources automatically in priority order:
+1. **Handoff files** (`~/.claude/handoffs/`) - most recent, validates it's filled in
+2. **Session state files** (`~/.claude/telegram-orchestrator/sessions/`) - cwd, task
+3. **Tmux logs** (`~/.claude/logs/tmux/`) - picks largest file, extracts task + actions
+4. **Git/PR state** - branch, uncommitted changes, open PRs in the working directory
+
+### What NOT to Do
+- Do NOT check one source and give up
+- Do NOT start a session with just `$HOME` as working directory if it had a real project
+- Do NOT pick an old handoff without checking if there's newer work
+- Do NOT skip injecting context — every restarted session MUST know what it was doing
+
+### Manual Recovery (only if script fails)
+If recover-session.sh doesn't work, check these sources yourself IN ORDER:
+1. `ls -t ~/.claude/handoffs/${SESSION}-*.md | head -3` — read the newest
+2. `cat ~/.claude/telegram-orchestrator/sessions/${SESSION}` — check cwd and task
+3. `ls -S ~/.claude/logs/tmux/${SESSION}_*.log | head -1` — read the biggest log
+4. `cd <working-dir> && gh pr list --state open` — check for open PRs
+5. `cd <working-dir> && git log --oneline -5` — check recent commits
+
 ## Troubleshooting
 
 **Session has stuck input:**

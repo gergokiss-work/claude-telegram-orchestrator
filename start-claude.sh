@@ -130,19 +130,35 @@ fi
 # Enable session logging (defense-in-depth, also handled by tmux session-created hook)
 tmux pipe-pane -t "$SESSION_NAME" "exec $HOME/.claude/scripts/tmux-log-pipe.sh '$SESSION_NAME'" 2>/dev/null || true
 
+# Build session-specific prompt with identity baked in
+WORKER_MD="$SCRIPT_DIR/worker-claude.md"
+COORDINATOR_MD="$SCRIPT_DIR/coordinator-claude.md"
+SESSION_PROMPT="/tmp/claude-prompt-${SESSION_NAME}.md"
+
+build_session_prompt() {
+    local base_md="$1"
+    local session="$2"
+    if [[ -f "$base_md" ]]; then
+        sed "s/{SESSION_IDENTITY}/$session/g" "$base_md" > "$SESSION_PROMPT"
+    fi
+}
+
 # Start Claude - coordinator, resuming, or fresh
 if [[ "$COORDINATOR_MODE" == "true" ]]; then
-    # Start coordinator with special system prompt
-    COORDINATOR_MD="$SCRIPT_DIR/coordinator-claude.md"
-    tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions --append-system-prompt \"\$(cat $COORDINATOR_MD)\""
+    build_session_prompt "$COORDINATOR_MD" "$SESSION_NAME"
+    tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions --append-system-prompt \"\$(cat $SESSION_PROMPT)\""
     tmux send-keys -t "$SESSION_NAME" -H 0d
 elif [[ -n "$RESUME_SESSION" ]]; then
     # Resume existing session
     tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions --resume $RESUME_SESSION"
     tmux send-keys -t "$SESSION_NAME" -H 0d
 else
-    # Start fresh Claude
-    tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions"
+    build_session_prompt "$WORKER_MD" "$SESSION_NAME"
+    if [[ -f "$SESSION_PROMPT" ]]; then
+        tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions --append-system-prompt \"\$(cat $SESSION_PROMPT)\""
+    else
+        tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions"
+    fi
     tmux send-keys -t "$SESSION_NAME" -H 0d
 
     # Send initial prompt if provided

@@ -51,6 +51,7 @@ tmux sessions: claude-0, claude-1, claude-2...
 | `orchestrator.sh` | Main daemon - polls Telegram, routes messages |
 | `start-claude.sh` | Creates new tmux session with Claude |
 | `send-summary.sh` | Send formatted message to Telegram |
+| `send-file.sh` | Send files (PDF, images, video, etc.) to Telegram |
 | `notify.sh` | Send notification (used by hooks) |
 | `find-session.sh` | Search past sessions by keyword |
 | `.env.local` | Secrets (TELEGRAM_BOT_TOKEN, OPENAI_API_KEY) |
@@ -154,6 +155,26 @@ When you see `<tg>send-summary.sh</tg>` at the end of a message, you MUST:
 - User can't see the Mac screen - provide full context
 - Include: what was asked, what was done, results, any blockers
 - Keep readable but complete - use bullets for scannability
+
+## Sending Files to Telegram
+
+Use `send-file.sh` to send PDFs, images, videos, or any file to Telegram:
+
+```bash
+# Basic - send a file
+~/.claude/telegram-orchestrator/send-file.sh /path/to/report.pdf
+
+# With session tag (for reply routing)
+~/.claude/telegram-orchestrator/send-file.sh --session $(tmux display-message -p '#S') /path/to/file.pdf
+
+# With caption
+~/.claude/telegram-orchestrator/send-file.sh --session $(tmux display-message -p '#S') --caption "Here's the report" /path/to/report.pdf
+
+# Caption as positional arg
+~/.claude/telegram-orchestrator/send-file.sh --session $(tmux display-message -p '#S') /path/to/file.pdf "Optional caption"
+```
+
+**Auto-detection:** Images send as photos (inline preview), videos as video, audio as audio, everything else (PDF, zip, etc.) as documents. Max file size: 50MB.
 
 ## Auto-Start on Boot
 

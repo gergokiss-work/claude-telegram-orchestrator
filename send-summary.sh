@@ -70,11 +70,74 @@ FORMATTED="📝 <b>[$SESSION]</b>
 $MESSAGE"
 
 if [[ -n "$TELEGRAM_CHAT_ID" && -n "$TELEGRAM_BOT_TOKEN" ]]; then
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"chat_id\": \"$TELEGRAM_CHAT_ID\",
-            \"text\": $(echo "$FORMATTED" | jq -Rs .),
-            \"parse_mode\": \"HTML\"
-        }" > /dev/null
+    # Telegram message limit
+    MAX_LEN=4096
+    HEADER="📝 <b>[$SESSION]</b>
+
+"
+    HEADER_LEN=${#HEADER}
+
+    # Send function (handles one chunk)
+    send_chunk() {
+        local text="$1"
+        curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"chat_id\": \"$TELEGRAM_CHAT_ID\",
+                \"text\": $(printf '%s' "$text" | jq -Rs .),
+                \"parse_mode\": \"HTML\"
+            }" > /dev/null
+    }
+
+    if [[ ${#FORMATTED} -le $MAX_LEN ]]; then
+        # Fits in one message
+        send_chunk "$FORMATTED"
+    else
+        # Split into parts — break on newlines to keep formatting clean
+        PART_NUM=1
+        REMAINING="$MESSAGE"
+        # Available space per part: limit minus header minus " (N/M)" suffix
+        AVAIL=$((MAX_LEN - HEADER_LEN - 20))
+
+        while [[ -n "$REMAINING" ]]; do
+            if [[ ${#REMAINING} -le $AVAIL ]]; then
+                CHUNK="$REMAINING"
+                REMAINING=""
+            else
+                # Find last newline within the available space
+                CHUNK="${REMAINING:0:$AVAIL}"
+                BREAK_POS=$(printf '%s' "$CHUNK" | grep -b -o $'\n' | tail -1 | cut -d: -f1)
+                if [[ -n "$BREAK_POS" ]] && [[ "$BREAK_POS" -gt $((AVAIL / 3)) ]]; then
+                    # Break at last newline (if it's not too early in the chunk)
+                    CHUNK="${REMAINING:0:$((BREAK_POS + 1))}"
+                fi
+                REMAINING="${REMAINING:${#CHUNK}}"
+            fi
+
+            # Count total parts (estimate)
+            TOTAL_EST=$(( (${#MESSAGE} + AVAIL - 1) / AVAIL ))
+            [[ $TOTAL_EST -lt $PART_NUM ]] && TOTAL_EST=$PART_NUM
+
+            if [[ $TOTAL_EST -gt 1 ]]; then
+                PART_HEADER="📝 <b>[$SESSION]</b> (${PART_NUM}/${TOTAL_EST})
+
+"
+            else
+                PART_HEADER="$HEADER"
+            fi
+
+            send_chunk "${PART_HEADER}${CHUNK}"
+            PART_NUM=$((PART_NUM + 1))
+            # Small delay between parts to maintain order
+            [[ -n "$REMAINING" ]] && sleep 0.3
+        done
+    fi
+
+    # Also send as voice message (async, non-blocking)
+    VOICE_SCRIPT="$SCRIPT_DIR/send-voice.sh"
+    if [[ -x "$VOICE_SCRIPT" ]]; then
+        # Strip HTML tags for cleaner speech
+        VOICE_TEXT=$(echo "$MESSAGE" | sed 's/<[^>]*>//g' | sed 's/&amp;/and/g' | sed 's/&lt;/</g' | sed 's/&gt;/>/g')
+        ( "$VOICE_SCRIPT" --session "$SESSION" "$VOICE_TEXT" ) &>/dev/null &
+    fi
 fi

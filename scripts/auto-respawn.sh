@@ -196,21 +196,99 @@ if [ -z "$HANDOFF_FILE" ]; then
 fi
 
 if [ -z "$HANDOFF_FILE" ]; then
-    log "ERROR: No handoff file created within timeout. Aborting auto-respawn."
-    "$INJECT_SCRIPT" claude-0 "⚠️ AUTO-RESPAWN FAILED for $SESSION
-
-No handoff file created within ${WAIT_SECONDS}s.
-Manual intervention needed." 2>/dev/null
-    exit 1
+    log "WARNING: No handoff file created within timeout. Will use tmux log fallback."
+    HANDOFF_FILE=""
 fi
 
-# Step 3: Extract continuation prompt from handoff
-log "Step 3: Extracting continuation info from handoff"
-CONTINUATION=$(grep -A 100 "## Continuation Prompt" "$HANDOFF_FILE" | grep -A 100 '```' | head -50 | tail -n +2 | grep -B 100 '```' | head -n -1)
+# Step 3: Validate handoff content and extract continuation
+log "Step 3: Validating handoff and extracting continuation info"
+HANDOFF_VALID=false
+CONTINUATION=""
 
-if [ -z "$CONTINUATION" ]; then
-    # Fallback continuation
-    CONTINUATION="Continue from where previous session left off. Read handoff: cat $HANDOFF_FILE"
+if [ -n "$HANDOFF_FILE" ] && [ -f "$HANDOFF_FILE" ]; then
+    # Check if handoff was actually filled in (not just the empty template)
+    # Empty templates contain "{SESSION_NAME}" and "{CLEAR_GOAL_STATEMENT}" placeholders
+    if grep -q '{SESSION_NAME}\|{CLEAR_GOAL_STATEMENT}\|{TIMESTAMP}' "$HANDOFF_FILE"; then
+        log "WARNING: Handoff file is an unfilled template - using tmux log fallback"
+        HANDOFF_VALID=false
+    else
+        # Check if there's meaningful content (more than just template structure)
+        CONTENT_LINES=$(grep -cvE '^\s*$|^#|^-{3,}|^\||^[*-] \[' "$HANDOFF_FILE" 2>/dev/null || echo "0")
+        if [ "$CONTENT_LINES" -lt 5 ]; then
+            log "WARNING: Handoff file has minimal content ($CONTENT_LINES lines) - using tmux log fallback"
+            HANDOFF_VALID=false
+        else
+            HANDOFF_VALID=true
+            CONTINUATION=$(grep -A 100 "## Continuation Prompt" "$HANDOFF_FILE" | grep -A 100 '```' | head -50 | tail -n +2 | grep -B 100 '```' | head -n -1)
+        fi
+    fi
+fi
+
+# Fallback: Extract context from tmux logs if handoff is empty/missing
+TMUX_LOG_CONTEXT=""
+if [ "$HANDOFF_VALID" = false ]; then
+    log "Using tmux log fallback to extract session context"
+    # Find the LARGEST log file for this session (most substantial work, not a failed respawn's tiny log)
+    LATEST_LOG=$(ls -S "$HOME/.claude/logs/tmux/${SESSION}_"*.log 2>/dev/null | head -1)
+    if [ -n "$LATEST_LOG" ] && [ -f "$LATEST_LOG" ]; then
+        log "Using log file: $LATEST_LOG ($(wc -c < "$LATEST_LOG") bytes)"
+
+        # Extract real user prompts - filter out:
+        #   - Startup hints (Try "...", refactor, how do I)
+        #   - Empty prompts
+        #   - Very short lines (likely UI artifacts)
+        # The ❯ character may have surrounding whitespace/formatting in tmux logs
+        INITIAL_TASK=$(grep -E "^❯ " "$LATEST_LOG" 2>/dev/null \
+            | grep -vE 'Try "|refactor <|how do I |how does ' \
+            | grep -vE '^\s*$|^❯\s*$' \
+            | awk 'length > 15' \
+            | head -1 \
+            | sed 's/^❯ //')
+
+        # If no match with ^❯, try with looser pattern (tmux may strip/add chars)
+        if [ -z "$INITIAL_TASK" ]; then
+            INITIAL_TASK=$(grep -E "❯ " "$LATEST_LOG" 2>/dev/null \
+                | grep -vE 'Try "|refactor <|how do I |how does |bypass permissions|shift\+tab' \
+                | grep -vE '^\s*$' \
+                | awk 'length > 20' \
+                | head -1 \
+                | sed 's/.*❯ //')
+        fi
+
+        # Extract recent meaningful output (last commands/actions)
+        RECENT_ACTIONS=$(grep -E "^⏺|Bash\(|Read |Edit |Task\(" "$LATEST_LOG" 2>/dev/null | tail -10 | head -10 | sed 's/^/  /')
+
+        # Extract working directory from shell prompt patterns
+        LOG_WORKDIR=$(grep -oE '/Users/gergokiss/[a-zA-Z0-9/_.-]+' "$LATEST_LOG" 2>/dev/null \
+            | grep -vE '\.claude/|\.log|/tmp/' \
+            | tail -1)
+
+        # Also check for send-summary content which often describes the task
+        LAST_SUMMARY=$(grep -oE 'send-summary.sh[^"]*"[^"]*"' "$LATEST_LOG" 2>/dev/null | tail -1 | sed 's/send-summary.sh[^"]*"//' | sed 's/"$//')
+
+        if [ -n "$INITIAL_TASK" ]; then
+            TMUX_LOG_CONTEXT="ORIGINAL TASK: $INITIAL_TASK"
+        elif [ -n "$LAST_SUMMARY" ]; then
+            TMUX_LOG_CONTEXT="LAST KNOWN WORK (from Telegram summary): $LAST_SUMMARY"
+        fi
+
+        if [ -n "$RECENT_ACTIONS" ]; then
+            TMUX_LOG_CONTEXT="${TMUX_LOG_CONTEXT}
+
+RECENT ACTIONS (from logs):
+$RECENT_ACTIONS"
+        fi
+
+        [ -n "$LOG_WORKDIR" ] && WORKING_DIR="$LOG_WORKDIR"
+        log "Extracted task: ${INITIAL_TASK:0:100}..."
+        [ -n "$LOG_WORKDIR" ] && log "Extracted working dir: $LOG_WORKDIR"
+    fi
+fi
+
+if [ -z "$CONTINUATION" ] && [ -n "$TMUX_LOG_CONTEXT" ]; then
+    CONTINUATION="$TMUX_LOG_CONTEXT"
+elif [ -z "$CONTINUATION" ]; then
+    CONTINUATION="Continue from where previous session left off."
 fi
 
 # Step 4: Kill old session
@@ -225,16 +303,58 @@ if [ -z "$WORKING_DIR" ]; then
 fi
 [ -z "$WORKING_DIR" ] && WORKING_DIR="$HOME"
 
-# Step 6: Start fresh session
+# Step 6: Start fresh session with worker system prompt
 log "Step 5: Starting fresh $SESSION in $WORKING_DIR"
-cd "$WORKING_DIR"
+WORKER_MD="$HOME/.claude/telegram-orchestrator/worker-claude.md"
+COORDINATOR_MD="$HOME/.claude/telegram-orchestrator/coordinator-claude.md"
+
+# Determine which system prompt to use
+SYSTEM_PROMPT_FILE=""
+if [[ "$SESSION" == "claude-0" ]] || [[ "$SESSION" == "claude-0-acc2" ]]; then
+    [ -f "$COORDINATOR_MD" ] && SYSTEM_PROMPT_FILE="$COORDINATOR_MD"
+else
+    [ -f "$WORKER_MD" ] && SYSTEM_PROMPT_FILE="$WORKER_MD"
+fi
+
 # Detect account suffix and set config dir
 if [[ "$SESSION" == *-acc2 ]]; then
-    tmux new-session -d -s "$SESSION" -e "CLAUDE_CONFIG_DIR=$HOME/.claude-account2" "claude --dangerously-skip-permissions"
+    tmux new-session -d -s "$SESSION" -c "$WORKING_DIR" -e "CLAUDE_CONFIG_DIR=$HOME/.claude-account2"
 else
-    tmux new-session -d -s "$SESSION" "claude --dangerously-skip-permissions"
+    tmux new-session -d -s "$SESSION" -c "$WORKING_DIR"
 fi
-sleep 4
+
+# Enable session logging
+tmux pipe-pane -t "$SESSION" "exec $HOME/.claude/scripts/tmux-log-pipe.sh '$SESSION'" 2>/dev/null || true
+
+sleep 1
+
+# Start Claude - use \$(cat file) pattern to avoid shell escaping issues
+# The sed/tr approach mangles special characters in the system prompt
+if [ -n "$SYSTEM_PROMPT_FILE" ]; then
+    tmux send-keys -t "$SESSION" "claude --dangerously-skip-permissions --append-system-prompt \"\$(cat $SYSTEM_PROMPT_FILE)\"" Enter
+else
+    tmux send-keys -t "$SESSION" "claude --dangerously-skip-permissions" Enter
+fi
+
+# Wait for Claude to fully boot (check for idle prompt)
+log "Waiting for Claude to boot..."
+BOOT_WAITED=0
+BOOT_TIMEOUT=45
+while [ $BOOT_WAITED -lt $BOOT_TIMEOUT ]; do
+    sleep 3
+    BOOT_WAITED=$((BOOT_WAITED + 3))
+    BOOT_CHECK=$(tmux capture-pane -t "$SESSION" -p 2>/dev/null)
+    # Check multiple patterns - any of these mean Claude is ready
+    if echo "$BOOT_CHECK" | grep -qiE "bypass permissions|shift.*tab.*cycle|% left|Try \""; then
+        log "Claude booted after ${BOOT_WAITED}s"
+        break
+    fi
+done
+if [ $BOOT_WAITED -ge $BOOT_TIMEOUT ]; then
+    log "WARNING: Claude boot timeout after ${BOOT_TIMEOUT}s, continuing anyway"
+fi
+# Extra settle time after boot detection
+sleep 2
 
 # Step 6.5: Check for active task file (ralph-task.sh integration)
 TASK_FILE="$HANDOFF_DIR/${SESSION}-task.md"
@@ -262,57 +382,49 @@ When ALL done, set EXIT_SIGNAL: true in the task file.
 fi
 
 # Step 7: Inject continuation prompt
+# Write the continuation prompt to a temp file to avoid tmux paste issues
+# with large multi-line content containing special characters
 log "Step 6: Injecting continuation prompt"
-"$INJECT_SCRIPT" "$SESSION" "🚀 **AUTO-RESPAWN COMPLETE - Fresh Instance**
+RESPAWN_PROMPT_FILE=$(mktemp /tmp/respawn-prompt-XXXXXX.md)
 
-Previous session hit context threshold (${PERCENT}%).
-Handoff file: $HANDOFF_FILE
+if [ "$HANDOFF_VALID" = true ]; then
+    cat > "$RESPAWN_PROMPT_FILE" << RESPAWN_EOF
+You are a respawned session (previous hit ${PERCENT}% context). Read your handoff file first, then continue:
 
-## Read Your Handoff First
-\`\`\`bash
 cat $HANDOFF_FILE
-\`\`\`
 
-## Your Continuation
 $CONTINUATION
 $TASK_SECTION
-## Context Awareness (CRITICAL)
-**Threshold is 50%.** Check context BEFORE starting each new task:
-\`\`\`bash
-~/.claude/scripts/check-context.sh
-\`\`\`
+After reading the handoff, continue the work. Send a Telegram summary when you make progress.
+RESPAWN_EOF
+else
+    cat > "$RESPAWN_PROMPT_FILE" << RESPAWN_EOF
+You are a respawned session (previous hit ${PERCENT}% context). No valid handoff was saved, but here is what was extracted from the session logs:
 
-**Rules:**
-- **<40%:** OK to start new tasks
-- **40-49%:** Only start small tasks, consider if next task fits
-- **>=50%:** Do NOT start new tasks - complete current work and hand off
+$CONTINUATION
 
-## 📝 HANDOFF PROTOCOL
+Continue this work. Send a Telegram summary when you make progress.
+<tg>send-summary.sh</tg>
+RESPAWN_EOF
+fi
 
-**FIRST:** Read previous handoff, then create YOUR handoff file immediately:
-\`\`\`bash
-SESSION=\$(tmux display-message -p '#S')
-TIMESTAMP=\$(date '+%Y-%m-%d-%H%M')
-# Create: ~/.claude/handoffs/\${SESSION}-\${TIMESTAMP}.md
-\`\`\`
-
-**AS YOU WORK:** Add timestamped entries to Progress Log
-**AT THRESHOLD:** Fill Continuation Prompt section - file is already complete
-
-## Reporting
-- Telegram: \`~/.claude/telegram-orchestrator/send-summary.sh --session \$(tmux display-message -p '#S') \"msg\"\`
-- TTS: \`~/.claude/scripts/tts-write.sh \"msg\"\`
-
-**Start now: 1) Read handoff, 2) Create your handoff file, 3) Work.**" 2>/dev/null
+# Inject using the file - inject-prompt.sh handles the tmux buffer/paste
+PROMPT_TO_INJECT=$(cat "$RESPAWN_PROMPT_FILE")
+"$INJECT_SCRIPT" "$SESSION" "$PROMPT_TO_INJECT" 2>/dev/null
+rm -f "$RESPAWN_PROMPT_FILE"
 
 # Step 8: Notify orchestrator
 if [ "$NOTIFY_ORCH" = "true" ] && [ "$SESSION" != "claude-0" ]; then
     log "Step 7: Notifying orchestrator"
+    if [ "$HANDOFF_VALID" = true ]; then
+        RESPAWN_SOURCE="handoff file: $HANDOFF_FILE"
+    else
+        RESPAWN_SOURCE="tmux log fallback (handoff was empty/missing)"
+    fi
     "$INJECT_SCRIPT" claude-0 "✅ AUTO-RESPAWN COMPLETE: $SESSION
 
 Old session killed at ${PERCENT}% context.
-Fresh instance started with continuation from:
-$HANDOFF_FILE
+Fresh instance started with continuation from: ${RESPAWN_SOURCE}
 
 No action needed - agent is continuing autonomously." 2>/dev/null
 fi
