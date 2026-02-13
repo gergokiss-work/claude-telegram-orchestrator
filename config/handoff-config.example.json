@@ -1,8 +1,15 @@
 {
-  "auto_respawn": true,
+  "auto_respawn": false,
   "threshold_percent": 60,
   "handoff_wait_seconds": 300,
   "notify_orchestrator": true,
-  "excluded_sessions": [],
+  "excluded_sessions": [
+    "backend",
+    "frontend",
+    "ncs-frontend",
+    "claude-9",
+    "claude-11",
+    "claude-12"
+  ],
   "context_watch": false
 }

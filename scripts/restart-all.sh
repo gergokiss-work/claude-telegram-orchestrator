@@ -265,9 +265,12 @@ restart_session() {
     # Enable session logging
     tmux pipe-pane -t "$session" "exec $LOG_PIPE '$session'" 2>/dev/null || true
 
-    # Start Claude
+    # Start Claude with appropriate system prompt
+    local WORKER_MD="$HOME/.claude/telegram-orchestrator/worker-claude.md"
     if is_coordinator "$session" && [ -f "$COORDINATOR_MD" ]; then
         tmux send-keys -t "$session" "claude --dangerously-skip-permissions --append-system-prompt \"\$(cat $COORDINATOR_MD)\""
+    elif [ -f "$WORKER_MD" ]; then
+        tmux send-keys -t "$session" "claude --dangerously-skip-permissions --append-system-prompt \"\$(cat $WORKER_MD)\""
     else
         tmux send-keys -t "$session" "claude --dangerously-skip-permissions"
     fi

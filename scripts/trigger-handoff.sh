@@ -14,6 +14,14 @@ if [ -z "$SESSION" ] || [ "$SESSION" = "unknown" ]; then
     exit 0
 fi
 
+# Check if session is excluded
+if [ -f "$CONFIG_FILE" ]; then
+    EXCLUDED=$(jq -r --arg s "$SESSION" '.excluded_sessions // [] | index($s)' "$CONFIG_FILE")
+    if [ "$EXCLUDED" != "null" ]; then
+        exit 0
+    fi
+fi
+
 # Get working directory from tmux
 WORKING_DIR=$(tmux display-message -t "$SESSION" -p '#{pane_current_path}' 2>/dev/null)
 

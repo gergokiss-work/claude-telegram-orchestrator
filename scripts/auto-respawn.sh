@@ -308,12 +308,19 @@ log "Step 5: Starting fresh $SESSION in $WORKING_DIR"
 WORKER_MD="$HOME/.claude/telegram-orchestrator/worker-claude.md"
 COORDINATOR_MD="$HOME/.claude/telegram-orchestrator/coordinator-claude.md"
 
-# Determine which system prompt to use
+# Build session-specific prompt with identity baked in
+SESSION_PROMPT="/tmp/claude-prompt-${SESSION}.md"
 SYSTEM_PROMPT_FILE=""
 if [[ "$SESSION" == "claude-0" ]] || [[ "$SESSION" == "claude-0-acc2" ]]; then
-    [ -f "$COORDINATOR_MD" ] && SYSTEM_PROMPT_FILE="$COORDINATOR_MD"
+    if [ -f "$COORDINATOR_MD" ]; then
+        sed "s/{SESSION_IDENTITY}/$SESSION/g" "$COORDINATOR_MD" > "$SESSION_PROMPT"
+        SYSTEM_PROMPT_FILE="$SESSION_PROMPT"
+    fi
 else
-    [ -f "$WORKER_MD" ] && SYSTEM_PROMPT_FILE="$WORKER_MD"
+    if [ -f "$WORKER_MD" ]; then
+        sed "s/{SESSION_IDENTITY}/$SESSION/g" "$WORKER_MD" > "$SESSION_PROMPT"
+        SYSTEM_PROMPT_FILE="$SESSION_PROMPT"
+    fi
 fi
 
 # Detect account suffix and set config dir

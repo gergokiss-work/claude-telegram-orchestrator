@@ -12,13 +12,23 @@ data/
 logs/
 sessions/
 watchdog-state/
+worker-state/
 *.db
+
+# Generated handoff files (framework templates are in templates/)
+handoffs/
+
+# TTS runtime
+tts/queue/
+tts/enabled
+tts/*.pid
 
 # Temp files
 temp/
 *.oga
 *.wav
 *.mp3
+*.aiff
 
 # macOS
 .DS_Store
@@ -26,4 +36,6 @@ temp/
 # Logs
 *.log
 images/
-worker-state/
+
+# Claude Code local settings (example is in config/)
+.claude/settings.local.json
