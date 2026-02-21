@@ -481,4 +481,13 @@ fi
 # Clear the trigger flag for the new session
 rm -f "$HANDOFF_DIR/.triggered-$SESSION"
 
+# Clear stale refinement-loop state for respawned session
+REFINEMENT_DIR="$HOME/.claude/refinement-loop"
+if [ -d "$REFINEMENT_DIR" ]; then
+    rm -f "$REFINEMENT_DIR/events/${SESSION}.event"
+    rm -f "$REFINEMENT_DIR/replies/${SESSION}.reply"
+    rm -f "$REFINEMENT_DIR/timers/${SESSION}.timer"
+    log "Cleared refinement-loop state for $SESSION"
+fi
+
 log "=== AUTO-RESPAWN COMPLETE for $SESSION ==="

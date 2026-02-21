@@ -643,7 +643,15 @@ cmd_status() {
                     fi
                 fi
 
-                echo "  • $instance: $state$cb_state$task_info$worker_info"
+                # Refinement loop status
+                local refine_info=""
+                local refine_timer="$HOME/.claude/refinement-loop/timers/${instance}.timer"
+                if [[ -f "$refine_timer" ]]; then
+                    local ref_round=$(jq -r '.round // 0' "$refine_timer" 2>/dev/null || echo "0")
+                    refine_info=" [refine: r${ref_round}/3]"
+                fi
+
+                echo "  • $instance: $state$cb_state$task_info$worker_info$refine_info"
             else
                 echo "  • $instance: (not running)"
             fi
@@ -854,8 +862,21 @@ All task checkboxes checked. Archiving task file."
                     ;;
             esac
 
-            # Force push every 5 min (but not if phase just completed)
-            if [[ $time_since_push -ge $FORCE_PUSH_INTERVAL && "$state" != "phase_complete" ]]; then
+            # Force push every 5 min (but not if phase just completed or refinement loop is active)
+            local refinement_active=false
+            local refinement_timer="$HOME/.claude/refinement-loop/timers/${session}.timer"
+            if [[ -f "$refinement_timer" ]]; then
+                local ref_round=$(jq -r '.round // 0' "$refinement_timer" 2>/dev/null || echo "0")
+                local ref_start=$(jq -r '.timer_start // 0' "$refinement_timer" 2>/dev/null || echo "0")
+                local ref_elapsed=$(($(date +%s) - ref_start))
+                # Defer force-push during the 15-min refinement window (3 rounds * 300s)
+                if [[ $ref_elapsed -lt 900 ]]; then
+                    refinement_active=true
+                    log "[$session] Refinement loop active (round $ref_round, ${ref_elapsed}s) — deferring force-push"
+                fi
+            fi
+
+            if [[ $time_since_push -ge $FORCE_PUSH_INTERVAL && "$state" != "phase_complete" && "$refinement_active" == "false" ]]; then
                 force_push "$session"
             fi
 

@@ -37,6 +37,7 @@ INITIAL_PROMPT=""
 WORKING_DIR="$HOME"
 COORDINATOR_MODE=""
 ACCOUNT_OVERRIDE=""
+OVERSEER_MODE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -55,6 +56,10 @@ while [[ $# -gt 0 ]]; do
         --account)
             ACCOUNT_OVERRIDE="$2"
             shift 2
+            ;;
+        --overseer)
+            OVERSEER_MODE="true"
+            shift
             ;;
         *)
             if [[ -z "$INITIAL_PROMPT" ]]; then
@@ -91,7 +96,14 @@ else
 fi
 
 # Determine session name (now includes account suffix)
-if [[ "$COORDINATOR_MODE" == "true" ]]; then
+if [[ "$OVERSEER_MODE" == "true" ]]; then
+    # Overseer: claude-overseer-1
+    SESSION_NAME="claude-overseer-1"
+    if session_exists "$SESSION_NAME"; then
+        echo "Overseer $SESSION_NAME already running"
+        exit 0
+    fi
+elif [[ "$COORDINATOR_MODE" == "true" ]]; then
     # Coordinator: claude-0-accN
     SESSION_NAME="claude-0${ACCOUNT_SUFFIX}"
 
@@ -133,6 +145,7 @@ tmux pipe-pane -t "$SESSION_NAME" "exec $HOME/.claude/scripts/tmux-log-pipe.sh '
 # Build session-specific prompt with identity baked in
 WORKER_MD="$SCRIPT_DIR/worker-claude.md"
 COORDINATOR_MD="$SCRIPT_DIR/coordinator-claude.md"
+OVERSEER_MD="$SCRIPT_DIR/overseer-claude.md"
 SESSION_PROMPT="/tmp/claude-prompt-${SESSION_NAME}.md"
 
 build_session_prompt() {
@@ -143,8 +156,12 @@ build_session_prompt() {
     fi
 }
 
-# Start Claude - coordinator, resuming, or fresh
-if [[ "$COORDINATOR_MODE" == "true" ]]; then
+# Start Claude - overseer, coordinator, resuming, or fresh
+if [[ "$OVERSEER_MODE" == "true" ]]; then
+    build_session_prompt "$OVERSEER_MD" "$SESSION_NAME"
+    tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions --append-system-prompt \"\$(cat $SESSION_PROMPT)\""
+    tmux send-keys -t "$SESSION_NAME" -H 0d
+elif [[ "$COORDINATOR_MODE" == "true" ]]; then
     build_session_prompt "$COORDINATOR_MD" "$SESSION_NAME"
     tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions --append-system-prompt \"\$(cat $SESSION_PROMPT)\""
     tmux send-keys -t "$SESSION_NAME" -H 0d
@@ -169,8 +186,36 @@ else
     fi
 fi
 
+# Auto-create handoff skeleton for non-coordinator/overseer sessions
+HANDOFF_DIR="$HOME/.claude/handoffs"
+HANDOFF_TEMPLATE="$HOME/.claude/templates/HANDOFF_V3.md"
+if [[ "$COORDINATOR_MODE" != "true" && "$OVERSEER_MODE" != "true" && -z "$RESUME_SESSION" ]]; then
+    mkdir -p "$HANDOFF_DIR"
+    if [[ -f "$HANDOFF_TEMPLATE" ]]; then
+        HANDOFF_TS=$(date '+%Y-%m-%d-%H%M')
+        HANDOFF_FILE="$HANDOFF_DIR/${SESSION_NAME}-${HANDOFF_TS}.md"
+        GIT_BRANCH=$(cd "$WORKING_DIR" && git branch --show-current 2>/dev/null || echo "N/A")
+        sed -e "s/{SESSION_NAME}/$SESSION_NAME/g" \
+            -e "s|{WORKING_DIR}|$WORKING_DIR|g" \
+            -e "s/{TIMESTAMP}/$HANDOFF_TS/g" \
+            -e "s/{GIT_BRANCH}/$GIT_BRANCH/g" \
+            -e "s/{PREVIOUS_FILE or \"None\"}/None/g" \
+            "$HANDOFF_TEMPLATE" > "$HANDOFF_FILE"
+    fi
+fi
+
 # Record session info
-if [[ "$COORDINATOR_MODE" == "true" ]]; then
+if [[ "$OVERSEER_MODE" == "true" ]]; then
+    cat > "$SESSIONS_DIR/$SESSION_NAME" << EOF
+{
+  "name": "$SESSION_NAME",
+  "started": "$(date -Iseconds)",
+  "cwd": "$WORKING_DIR",
+  "role": "overseer",
+  "account": $ACTIVE_ACCOUNT
+}
+EOF
+elif [[ "$COORDINATOR_MODE" == "true" ]]; then
     cat > "$SESSIONS_DIR/$SESSION_NAME" << EOF
 {
   "name": "$SESSION_NAME",
@@ -209,7 +254,11 @@ fi
 # echo $! > "$SESSIONS_DIR/$SESSION_NAME.monitor.pid"
 
 # Notify
-if [[ "$COORDINATOR_MODE" == "true" ]]; then
+if [[ "$OVERSEER_MODE" == "true" ]]; then
+    "$SCRIPT_DIR/notify.sh" "new" "$SESSION_NAME" "👁️ Overseer agent started
+Use: tmux attach -t $SESSION_NAME"
+    echo "Started overseer $SESSION_NAME"
+elif [[ "$COORDINATOR_MODE" == "true" ]]; then
     "$SCRIPT_DIR/notify.sh" "new" "$SESSION_NAME" "🎯 Coordinator started
 Ready to receive messages
 Use: tmux attach -t $SESSION_NAME"

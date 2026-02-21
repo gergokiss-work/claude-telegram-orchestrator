@@ -9,12 +9,28 @@ SESSIONS_DIR="$SCRIPT_DIR/sessions"
 [[ -f "$SCRIPT_DIR/.env.local" ]] && source "$SCRIPT_DIR/.env.local"
 [[ -f "$SCRIPT_DIR/config.env" ]] && source "$SCRIPT_DIR/config.env"
 
-# Parse args - check for --session flag
+# Parse args - check for --session, --voice, --no-voice flags
 SESSION_OVERRIDE=""
-if [[ "$1" == "--session" ]]; then
-    SESSION_OVERRIDE="$2"
-    shift 2
-fi
+SEND_VOICE=false  # Voice is OPT-IN: only sent when --voice is explicitly passed
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --session)
+            SESSION_OVERRIDE="$2"
+            shift 2
+            ;;
+        --voice)
+            SEND_VOICE=true
+            shift
+            ;;
+        --no-voice)
+            SEND_VOICE=false
+            shift
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
 
 MESSAGE="$1"
 [[ -z "$MESSAGE" ]] && exit 0
@@ -133,11 +149,20 @@ if [[ -n "$TELEGRAM_CHAT_ID" && -n "$TELEGRAM_BOT_TOKEN" ]]; then
         done
     fi
 
-    # Also send as voice message (async, non-blocking)
-    VOICE_SCRIPT="$SCRIPT_DIR/send-voice.sh"
-    if [[ -x "$VOICE_SCRIPT" ]]; then
-        # Strip HTML tags for cleaner speech
-        VOICE_TEXT=$(echo "$MESSAGE" | sed 's/<[^>]*>//g' | sed 's/&amp;/and/g' | sed 's/&lt;/</g' | sed 's/&gt;/>/g')
-        ( "$VOICE_SCRIPT" --session "$SESSION" "$VOICE_TEXT" ) &>/dev/null &
+    # Write event file for refinement-loop daemon
+    # This signals that an agent sent a summary and starts the reply timer
+    REFINEMENT_DIR="$HOME/.claude/refinement-loop"
+    if [[ -d "$REFINEMENT_DIR/events" ]]; then
+        echo "{\"session\":\"$SESSION\",\"timestamp\":$(date +%s)}" > "$REFINEMENT_DIR/events/${SESSION}.event"
+    fi
+
+    # Send voice message only when explicitly requested with --voice
+    if [[ "$SEND_VOICE" == "true" ]]; then
+        VOICE_SCRIPT="$SCRIPT_DIR/send-voice.sh"
+        if [[ -x "$VOICE_SCRIPT" ]]; then
+            # Strip HTML tags for cleaner speech
+            VOICE_TEXT=$(echo "$MESSAGE" | sed 's/<[^>]*>//g' | sed 's/&amp;/and/g' | sed 's/&lt;/</g' | sed 's/&gt;/>/g')
+            ( "$VOICE_SCRIPT" --session "$SESSION" "$VOICE_TEXT" ) &>/dev/null &
+        fi
     fi
 fi

@@ -460,6 +460,10 @@ show_help() {
 • <code>/ralph status [N]</code> - Worker status
 • <code>/ralph stop N</code> - Stop worker
 
+<b>Autonomy:</b>
+• <code>/refine [start|stop|config]</code> - Refinement loop
+• <code>/overseer [start|stop|scan]</code> - Cross-agent overseer
+
 <b>Communication:</b>
 • <code>/inject N msg</code> - Inject to session
 • <code>/tts [on|off]</code> - Toggle TTS
@@ -984,6 +988,91 @@ Example: /resume the auth bug fix"
         result=$(handle_ralph_cmd "$ralph_args")
         "$SCRIPT_DIR/notify.sh" "update" "ralph" "$result"
 
+    elif [[ "$message" == /refine* ]]; then
+        # /refine [cmd] - Refinement loop control
+        refine_args="${message#/refine}"
+        refine_args="${refine_args# }"
+        if [[ -z "$refine_args" ]]; then
+            result=$("$SCRIPT_DIR/refinement-loop.sh" status 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "refine" "🔁 <b>Refinement Loop</b>
+
+$result"
+        elif [[ "$refine_args" == "start" ]]; then
+            result=$("$SCRIPT_DIR/refinement-loop.sh" start 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "refine" "$result"
+        elif [[ "$refine_args" == "stop" ]]; then
+            result=$("$SCRIPT_DIR/refinement-loop.sh" stop 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "refine" "$result"
+        elif [[ "$refine_args" == "config" ]]; then
+            result=$("$SCRIPT_DIR/refinement-loop.sh" config 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "refine" "$result"
+        elif [[ "$refine_args" =~ ^trigger[[:space:]]+(.+) ]]; then
+            result=$("$SCRIPT_DIR/refinement-loop.sh" trigger "${BASH_REMATCH[1]}" 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "refine" "$result"
+        elif [[ "$refine_args" =~ ^cancel[[:space:]]+(.+) ]]; then
+            result=$("$SCRIPT_DIR/refinement-loop.sh" cancel "${BASH_REMATCH[1]}" 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "refine" "$result"
+        else
+            "$SCRIPT_DIR/notify.sh" "update" "refine" "🔁 <b>Refinement Loop Commands</b>
+
+• <code>/refine</code> - Show status
+• <code>/refine start</code> - Start daemon
+• <code>/refine stop</code> - Stop daemon
+• <code>/refine config</code> - Show config
+• <code>/refine trigger N</code> - Trigger refinement for session
+• <code>/refine cancel N</code> - Cancel timer for session"
+        fi
+
+    elif [[ "$message" == /overseer* ]]; then
+        # /overseer [cmd] - Overseer control
+        overseer_args="${message#/overseer}"
+        overseer_args="${overseer_args# }"
+        if [[ -z "$overseer_args" ]]; then
+            result=$("$SCRIPT_DIR/overseer.sh" status 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "overseer" "👁️ <b>Overseer</b>
+
+$result"
+        elif [[ "$overseer_args" == "start" ]]; then
+            result=$("$SCRIPT_DIR/overseer.sh" start 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "overseer" "$result"
+        elif [[ "$overseer_args" == "stop" ]]; then
+            result=$("$SCRIPT_DIR/overseer.sh" stop 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "overseer" "$result"
+        elif [[ "$overseer_args" == "agent start" ]]; then
+            result=$("$SCRIPT_DIR/overseer.sh" start-agent 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "overseer" "$result"
+        elif [[ "$overseer_args" == "agent stop" ]]; then
+            result=$("$SCRIPT_DIR/overseer.sh" stop-agent 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "overseer" "$result"
+        elif [[ "$overseer_args" == "scan" ]]; then
+            result=$("$SCRIPT_DIR/overseer.sh" scan 2>&1)
+            # Truncate for Telegram
+            result="${result:0:3500}"
+            "$SCRIPT_DIR/notify.sh" "update" "overseer" "👁️ <b>Overseer Scan</b>
+
+<pre>${result}</pre>"
+        elif [[ "$overseer_args" == "digest" ]]; then
+            result=$("$SCRIPT_DIR/overseer.sh" digest 2>&1)
+            "$SCRIPT_DIR/notify.sh" "update" "overseer" "👁️ <b>Overseer Digest</b>
+
+$result"
+        else
+            "$SCRIPT_DIR/notify.sh" "update" "overseer" "👁️ <b>Overseer Commands</b>
+
+<b>Daemon:</b>
+• <code>/overseer</code> - Show status
+• <code>/overseer start</code> - Start daemon
+• <code>/overseer stop</code> - Stop daemon
+
+<b>Agent:</b>
+• <code>/overseer agent start</code> - Start overseer Claude agent
+• <code>/overseer agent stop</code> - Stop overseer Claude agent
+
+<b>Info:</b>
+• <code>/overseer scan</code> - Run scan and show context map
+• <code>/overseer digest</code> - Show latest digest"
+        fi
+
     elif [[ "$message" == /account* ]]; then
         # /account [1|2|rotate] - Manage Claude accounts
         account_arg="${message#/account}"
@@ -1225,7 +1314,38 @@ while true; do
             if [[ -n "$message_text" && -n "$chat_id" ]]; then
                 if [[ -n "$target_session" ]]; then
                     log "Reply to $target_session: $message_text"
+                    # Signal refinement-loop that user replied (cancels timer)
+                    REFINEMENT_DIR="$HOME/.claude/refinement-loop"
+                    [[ -d "$REFINEMENT_DIR/replies" ]] && echo "$(date +%s)" > "$REFINEMENT_DIR/replies/${target_session}.reply"
                     inject_input "$target_session" "$message_text" "true"
+                elif [[ "$message_text" =~ ^@claude-([0-9]+)[[:space:]]+(.*) ]]; then
+                    # @claude-N routing: "@claude-3 yes approved" → claude-3
+                    local at_session_num="${BASH_REMATCH[1]}"
+                    local at_message="${BASH_REMATCH[2]}"
+                    local at_session=$(resolve_session "$at_session_num")
+                    if [[ -n "$at_session" ]]; then
+                        log "@claude-$at_session_num routing to $at_session: $at_message"
+                        # Signal refinement-loop that user replied
+                        [[ -d "$REFINEMENT_DIR/replies" ]] && echo "$(date +%s)" > "$REFINEMENT_DIR/replies/${at_session}.reply"
+                        inject_input "$at_session" "$at_message" "true"
+                    else
+                        log "@claude-$at_session_num: session not found, sending error"
+                        "$SCRIPT_DIR/notify.sh" "error" "system" "Session claude-$at_session_num not found"
+                    fi
+                elif [[ "$message_text" =~ ^@([0-9]+)[[:space:]]+(.*) ]]; then
+                    # @N shorthand routing: "@3 yes approved" → claude-3
+                    local at_session_num="${BASH_REMATCH[1]}"
+                    local at_message="${BASH_REMATCH[2]}"
+                    local at_session=$(resolve_session "$at_session_num")
+                    if [[ -n "$at_session" ]]; then
+                        log "@$at_session_num routing to $at_session: $at_message"
+                        # Signal refinement-loop that user replied
+                        [[ -d "$REFINEMENT_DIR/replies" ]] && echo "$(date +%s)" > "$REFINEMENT_DIR/replies/${at_session}.reply"
+                        inject_input "$at_session" "$at_message" "true"
+                    else
+                        log "@$at_session_num: session not found, sending error"
+                        "$SCRIPT_DIR/notify.sh" "error" "system" "Session claude-$at_session_num not found"
+                    fi
                 else
                     log "Received: $message_text from $chat_id"
                     process_message "$message_text" "$chat_id"
