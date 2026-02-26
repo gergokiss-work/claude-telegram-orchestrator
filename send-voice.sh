@@ -72,8 +72,16 @@ AIFF_FILE=$(mktemp /tmp/voice-XXXXXX.aiff)
 OGG_FILE=$(mktemp /tmp/voice-XXXXXX.ogg)
 trap "rm -f '$AIFF_FILE' '$OGG_FILE'" EXIT
 
-# Generate audio with macOS say
+# Wait for TTS reader lock — prevents say overlap with local TTS playback
+TTS_LOCK="$HOME/.claude/tts/reader.lock"
+exec 8>"$TTS_LOCK"
+flock 8  # blocking wait — runs after tts-reader finishes
+
+# Generate audio with macOS say (file output only — no local playback)
 say -v Daniel -r 200 -o "$AIFF_FILE" "$SPEECH_TEXT"
+
+# Release lock immediately after say finishes (we don't play locally)
+flock -u 8
 
 if [[ ! -s "$AIFF_FILE" ]]; then
     echo "ERROR: Failed to generate audio with 'say'" >&2

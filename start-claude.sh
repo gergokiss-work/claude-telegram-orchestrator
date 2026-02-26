@@ -178,29 +178,75 @@ else
     fi
     tmux send-keys -t "$SESSION_NAME" -H 0d
 
-    # Send initial prompt if provided
-    if [[ -n "$INITIAL_PROMPT" ]]; then
-        sleep 5
-        tmux send-keys -t "$SESSION_NAME" "$INITIAL_PROMPT"
-        tmux send-keys -t "$SESSION_NAME" -H 0d
+    # Auto-create handoff skeleton BEFORE initial prompt (so we can reference it)
+    HANDOFF_DIR="$HOME/.claude/handoffs"
+    HANDOFF_TEMPLATE="$HOME/.claude/templates/HANDOFF_V3.md"
+    HANDOFF_FILE=""
+    if [[ -z "$RESUME_SESSION" ]]; then
+        mkdir -p "$HANDOFF_DIR"
+        if [[ -f "$HANDOFF_TEMPLATE" ]]; then
+            HANDOFF_TS=$(date '+%Y-%m-%d-%H%M')
+            HANDOFF_FILE="$HANDOFF_DIR/${SESSION_NAME}-${HANDOFF_TS}.md"
+            GIT_BRANCH=$(cd "$WORKING_DIR" && git branch --show-current 2>/dev/null || echo "N/A")
+            sed -e "s/{SESSION_NAME}/$SESSION_NAME/g" \
+                -e "s|{WORKING_DIR}|$WORKING_DIR|g" \
+                -e "s/{TIMESTAMP}/$HANDOFF_TS/g" \
+                -e "s|{GIT_BRANCH}|$GIT_BRANCH|g" \
+                -e "s/{PREVIOUS_FILE or \"None\"}/None/g" \
+                "$HANDOFF_TEMPLATE" > "$HANDOFF_FILE"
+        fi
     fi
-fi
 
-# Auto-create handoff skeleton for non-coordinator/overseer sessions
-HANDOFF_DIR="$HOME/.claude/handoffs"
-HANDOFF_TEMPLATE="$HOME/.claude/templates/HANDOFF_V3.md"
-if [[ "$COORDINATOR_MODE" != "true" && "$OVERSEER_MODE" != "true" && -z "$RESUME_SESSION" ]]; then
-    mkdir -p "$HANDOFF_DIR"
-    if [[ -f "$HANDOFF_TEMPLATE" ]]; then
-        HANDOFF_TS=$(date '+%Y-%m-%d-%H%M')
-        HANDOFF_FILE="$HANDOFF_DIR/${SESSION_NAME}-${HANDOFF_TS}.md"
+    # Build and inject structured starter prompt (like respawn scripts do)
+    if [[ -n "$INITIAL_PROMPT" ]]; then
+        # Wait for Claude to boot
+        BOOT_WAITED=0
+        while [[ $BOOT_WAITED -lt 30 ]]; do
+            sleep 3
+            BOOT_WAITED=$((BOOT_WAITED + 3))
+            if tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null | grep -qiE "bypass permissions|shift.*tab.*cycle|% left|Try \""; then
+                break
+            fi
+        done
+        sleep 2
+
         GIT_BRANCH=$(cd "$WORKING_DIR" && git branch --show-current 2>/dev/null || echo "N/A")
-        sed -e "s/{SESSION_NAME}/$SESSION_NAME/g" \
-            -e "s|{WORKING_DIR}|$WORKING_DIR|g" \
-            -e "s/{TIMESTAMP}/$HANDOFF_TS/g" \
-            -e "s/{GIT_BRANCH}/$GIT_BRANCH/g" \
-            -e "s/{PREVIOUS_FILE or \"None\"}/None/g" \
-            "$HANDOFF_TEMPLATE" > "$HANDOFF_FILE"
+        GIT_STATUS=$(cd "$WORKING_DIR" && git status --short 2>/dev/null | head -10)
+        GIT_PR=$(cd "$WORKING_DIR" && gh pr list --head "$GIT_BRANCH" --state open --json number,title --jq '.[0] | "#\(.number): \(.title)"' 2>/dev/null || true)
+
+        STARTER_PROMPT="You are **${SESSION_NAME}**, a fresh worker session.
+
+**Working directory:** \`${WORKING_DIR}\`
+**Git branch:** \`${GIT_BRANCH}\`"
+
+        [[ -n "$GIT_PR" ]] && STARTER_PROMPT="${STARTER_PROMPT}
+**Open PR:** ${GIT_PR}"
+
+        [[ -n "$GIT_STATUS" ]] && STARTER_PROMPT="${STARTER_PROMPT}
+
+**Uncommitted changes:**
+\`\`\`
+${GIT_STATUS}
+\`\`\`"
+
+        STARTER_PROMPT="${STARTER_PROMPT}
+
+## Your Task
+${INITIAL_PROMPT}"
+
+        [[ -n "$HANDOFF_FILE" ]] && STARTER_PROMPT="${STARTER_PROMPT}
+
+## Handoff
+Your handoff file is pre-created at: \`${HANDOFF_FILE}\`
+Update its Mission section with your task, then keep the Action Log updated as you work."
+
+        STARTER_PROMPT="${STARTER_PROMPT}
+
+## When Done
+Send a Telegram summary and TTS update when you complete this task.
+<tg>send-summary.sh</tg>"
+
+        "$SCRIPT_DIR/inject-prompt.sh" "$SESSION_NAME" "$STARTER_PROMPT" 2>/dev/null
     fi
 fi
 

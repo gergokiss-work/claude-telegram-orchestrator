@@ -11,7 +11,7 @@ SESSIONS_DIR="$SCRIPT_DIR/sessions"
 
 # Parse args - check for --session, --voice, --no-voice flags
 SESSION_OVERRIDE=""
-SEND_VOICE=false  # Voice is OPT-IN: only sent when --voice is explicitly passed
+SEND_VOICE=true  # Voice is ON by default: every summary gets a voice message
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --session)
@@ -156,7 +156,36 @@ if [[ -n "$TELEGRAM_CHAT_ID" && -n "$TELEGRAM_BOT_TOKEN" ]]; then
         echo "{\"session\":\"$SESSION\",\"timestamp\":$(date +%s)}" > "$REFINEMENT_DIR/events/${SESSION}.event"
     fi
 
-    # Send voice message only when explicitly requested with --voice
+    # Notify watch via Mac API (non-blocking, best-effort)
+    WATCH_API_ENV="$HOME/work/gergo/watchos-app/mac-api/.env"
+    if [[ -f "$WATCH_API_ENV" ]]; then
+        (
+            WATCH_TOKEN=$(grep '^API_TOKEN=' "$WATCH_API_ENV" | cut -d= -f2)
+            WATCH_PORT=$(grep '^PORT=' "$WATCH_API_ENV" | cut -d= -f2)
+            WATCH_PORT="${WATCH_PORT:-8081}"
+            # Extract title from first bold tag (e.g., "Watch Notifications Fixed")
+            NOTIF_TITLE=$(echo "$MESSAGE" | sed -n 's/.*<b>\([^<]*\)<\/b>.*/\1/p' | head -1)
+            [[ -z "$NOTIF_TITLE" ]] && NOTIF_TITLE="$SESSION finished"
+            # Watch body: extract first bullet point after Result, or first meaningful line
+            # Keep it very short (~80 chars) for the tiny watch screen
+            NOTIF_BODY=$(echo "$MESSAGE" | sed 's/<[^>]*>//g' | sed 's/&amp;/and/g' | grep -m1 '^\s*•' | sed 's/^\s*•\s*//' | head -c 80)
+            # Fallback: grab the line after "Result:" if no bullet found
+            if [[ -z "$NOTIF_BODY" ]]; then
+                NOTIF_BODY=$(echo "$MESSAGE" | sed 's/<[^>]*>//g' | sed 's/&amp;/and/g' | grep -A1 -i 'result' | tail -1 | sed 's/^\s*//' | head -c 80)
+            fi
+            # Final fallback: first non-empty line after stripping
+            if [[ -z "$NOTIF_BODY" ]]; then
+                NOTIF_BODY=$(echo "$MESSAGE" | sed 's/<[^>]*>//g' | sed 's/&amp;/and/g' | sed '/^\s*$/d' | head -1 | head -c 80)
+            fi
+            curl -s -X POST "http://localhost:${WATCH_PORT}/notifications" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${WATCH_TOKEN}" \
+                -d "{\"session\":\"$SESSION\",\"title\":$(printf '%s' "$NOTIF_TITLE" | jq -Rs .),\"body\":$(printf '%s' "$NOTIF_BODY" | jq -Rs .),\"type\":\"task_complete\"}" \
+                --connect-timeout 2 --max-time 5 > /dev/null 2>&1
+        ) &
+    fi
+
+    # Send voice message with every summary (disable with --no-voice)
     if [[ "$SEND_VOICE" == "true" ]]; then
         VOICE_SCRIPT="$SCRIPT_DIR/send-voice.sh"
         if [[ -x "$VOICE_SCRIPT" ]]; then
