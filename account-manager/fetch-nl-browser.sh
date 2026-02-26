@@ -61,36 +61,33 @@ try_osascript() {
     trap "rm -f '$tmpfile'" RETURN
 
     # Run osascript with timeout to prevent hang if Chrome is frozen
-    timeout "$OSASCRIPT_TIMEOUT" osascript -e "
-tell application \"Google Chrome\"
-    if not running then return \"CHROME_NOT_RUNNING\"
-    repeat with w in every window
-        repeat with t in every tab of w
-            if URL of t contains \"claude.ai\" then
-                set jsResult to execute t javascript \"
-                    (function() {
-                        try {
-                            var xhr = new XMLHttpRequest();
-                            xhr.open('GET', '$USAGE_URL', false);
-                            xhr.timeout = 8000;
-                            xhr.send();
-                            if (xhr.status === 200) {
-                                return xhr.responseText;
-                            } else {
-                                return '{\\\"error\\\":\\\"http_' + xhr.status + '\\\"}';
-                            }
-                        } catch(e) {
-                            return '{\\\"error\\\":\\\"xhr_failed\\\"}';
-                        }
-                    })()
-                \"
-                return jsResult
-            end if
-        end repeat
-    end repeat
-    return \"NO_CLAUDE_TAB\"
-end tell
-" > "$tmpfile" 2>/dev/null
+    # macOS lacks `timeout`; use perl one-liner as portable alternative
+    #
+    # IMPORTANT: Only target claude.ai/settings tabs. The main claude.ai SPA
+    # (claude.ai/new, claude.ai/chat) blocks synchronous JS via osascript
+    # due to heavy React + service worker. The settings page works fine.
+    #
+    # JS is loaded from a separate file to avoid shell escaping nightmares.
+    local js_code
+    js_code=$(cat "$AM_DIR/nl-usage-osascript.js")
+
+    perl -e 'alarm shift; exec @ARGV' "$OSASCRIPT_TIMEOUT" osascript \
+        -e 'on run argv' \
+        -e '  set jsCode to item 1 of argv' \
+        -e '  tell application "Google Chrome"' \
+        -e '    if not running then return "CHROME_NOT_RUNNING"' \
+        -e '    repeat with w in every window' \
+        -e '      repeat with t in every tab of w' \
+        -e '        if URL of t contains "claude.ai/settings" then' \
+        -e '          set jsResult to execute t javascript jsCode' \
+        -e '          return jsResult' \
+        -e '        end if' \
+        -e '      end repeat' \
+        -e '    end repeat' \
+        -e '    return "NO_CLAUDE_TAB"' \
+        -e '  end tell' \
+        -e 'end run' \
+        -- "$js_code" > "$tmpfile" 2>/dev/null
 
     local exit_code=$?
     if [[ $exit_code -ne 0 ]]; then
