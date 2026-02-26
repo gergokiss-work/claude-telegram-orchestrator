@@ -197,57 +197,81 @@ else
         fi
     fi
 
-    # Build and inject structured starter prompt (like respawn scripts do)
-    if [[ -n "$INITIAL_PROMPT" ]]; then
-        # Wait for Claude to boot
-        BOOT_WAITED=0
-        while [[ $BOOT_WAITED -lt 30 ]]; do
-            sleep 3
-            BOOT_WAITED=$((BOOT_WAITED + 3))
-            if tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null | grep -qiE "bypass permissions|shift.*tab.*cycle|% left|Try \""; then
-                break
-            fi
-        done
-        sleep 2
+    # Wait for Claude to boot
+    BOOT_WAITED=0
+    while [[ $BOOT_WAITED -lt 30 ]]; do
+        sleep 3
+        BOOT_WAITED=$((BOOT_WAITED + 3))
+        if tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null | grep -qiE "bypass permissions|shift.*tab.*cycle|% left|Try \""; then
+            break
+        fi
+    done
+    sleep 2
 
-        GIT_BRANCH=$(cd "$WORKING_DIR" && git branch --show-current 2>/dev/null || echo "N/A")
-        GIT_STATUS=$(cd "$WORKING_DIR" && git status --short 2>/dev/null | head -10)
-        GIT_PR=$(cd "$WORKING_DIR" && gh pr list --head "$GIT_BRANCH" --state open --json number,title --jq '.[0] | "#\(.number): \(.title)"' 2>/dev/null || true)
+    GIT_BRANCH=$(cd "$WORKING_DIR" && git branch --show-current 2>/dev/null || echo "N/A")
+    GIT_STATUS=$(cd "$WORKING_DIR" && git status --short 2>/dev/null | head -10)
+    GIT_PR=$(cd "$WORKING_DIR" && gh pr list --head "$GIT_BRANCH" --state open --json number,title --jq '.[0] | "#\(.number): \(.title)"' 2>/dev/null || true)
 
-        STARTER_PROMPT="You are **${SESSION_NAME}**, a fresh worker session.
+    STARTER_PROMPT="You are **${SESSION_NAME}**, a fresh worker session.
 
 **Working directory:** \`${WORKING_DIR}\`
 **Git branch:** \`${GIT_BRANCH}\`"
 
-        [[ -n "$GIT_PR" ]] && STARTER_PROMPT="${STARTER_PROMPT}
+    [[ -n "$GIT_PR" ]] && STARTER_PROMPT="${STARTER_PROMPT}
 **Open PR:** ${GIT_PR}"
 
-        [[ -n "$GIT_STATUS" ]] && STARTER_PROMPT="${STARTER_PROMPT}
+    [[ -n "$GIT_STATUS" ]] && STARTER_PROMPT="${STARTER_PROMPT}
 
 **Uncommitted changes:**
 \`\`\`
 ${GIT_STATUS}
 \`\`\`"
 
+    # Task section: either user-provided or awaiting assignment
+    if [[ -n "$INITIAL_PROMPT" ]]; then
         STARTER_PROMPT="${STARTER_PROMPT}
 
 ## Your Task
 ${INITIAL_PROMPT}"
+    else
+        STARTER_PROMPT="${STARTER_PROMPT}
 
-        [[ -n "$HANDOFF_FILE" ]] && STARTER_PROMPT="${STARTER_PROMPT}
+## Status
+You have no task yet. Complete your startup actions and wait for instructions via Telegram."
+    fi
+
+    # Handoff reference
+    [[ -n "$HANDOFF_FILE" ]] && STARTER_PROMPT="${STARTER_PROMPT}
 
 ## Handoff
 Your handoff file is pre-created at: \`${HANDOFF_FILE}\`
 Update its Mission section with your task, then keep the Action Log updated as you work."
 
-        STARTER_PROMPT="${STARTER_PROMPT}
+    # Standard startup actions every session must execute
+    STARTER_PROMPT="${STARTER_PROMPT}
+
+## First Actions (do these NOW)
+1. Update your session state file:
+\`\`\`bash
+cat > ~/.claude/telegram-orchestrator/sessions/${SESSION_NAME} << SEOF
+{
+  \"name\": \"${SESSION_NAME}\",
+  \"started\": \"\$(date -Iseconds)\",
+  \"cwd\": \"${WORKING_DIR}\",
+  \"task\": \"${INITIAL_PROMPT:0:200}\",
+  \"status\": \"active\",
+  \"account\": ${ACTIVE_ACCOUNT}
+}
+SEOF
+\`\`\`
+2. Check your context: \`~/.claude/scripts/check-context.sh\`
+3. Send a Telegram ready/status message via send-summary.sh
 
 ## When Done
-Send a Telegram summary and TTS update when you complete this task.
+Send a Telegram summary and TTS update when you complete any task.
 <tg>send-summary.sh</tg>"
 
-        "$SCRIPT_DIR/inject-prompt.sh" "$SESSION_NAME" "$STARTER_PROMPT" 2>/dev/null
-    fi
+    "$SCRIPT_DIR/inject-prompt.sh" "$SESSION_NAME" "$STARTER_PROMPT" 2>/dev/null
 fi
 
 # Record session info
