@@ -770,6 +770,17 @@ cmd_daemon() {
                 fi
             fi
 
+            # Check if session has an active Teams watch (waiting for reply)
+            local teams_watch_file="$HOME/.claude/teams-watches/${session}.json"
+            if [[ -f "$teams_watch_file" ]]; then
+                local watch_status
+                watch_status=$(python3 -c "import json; print(json.load(open('$teams_watch_file')).get('status',''))" 2>/dev/null || echo "")
+                if [[ "$watch_status" == "active" ]]; then
+                    log "[$session] Waiting for Teams reply - skipping force push"
+                    continue
+                fi
+            fi
+
             # Circuit breaker check FIRST
             if cb_is_open "$session"; then
                 log "[$session] Circuit OPEN - skipping (needs /watchdog reset $session)"
