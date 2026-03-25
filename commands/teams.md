@@ -15,6 +15,9 @@ Read conversations, find chats, and reply to Teams messages on behalf of Kiss Ge
 /teams send <person_name> <message>    Reply to a chat with someone
 /teams send-to <email> <message>       Send a 1:1 message by email address
 /teams list                            List recent chats
+/teams watch [chat_id]                 Watch a chat for replies (auto-resume when reply arrives)
+/teams unwatch                         Cancel your active watch
+/teams watches                         List all active watches across sessions
 ```
 
 If `$ARGUMENTS` is empty, ask the user what they want to do.
@@ -94,6 +97,51 @@ If there are attachments, note them: `📎 filename.txt (content-type)`
 3. Send:
 ```bash
 ~/.claude/scripts/teams-api.sh send-to "<email>" "<html_message>"
+```
+
+#### After any `send` or `send-to` — Offer Watch
+After a successful send, the response includes `chatId` and `messageTime`. Offer:
+> "Want me to monitor for replies? I'll resume automatically when they respond."
+
+If yes, register a watch:
+```bash
+SESSION=$(tmux display-message -p '#S')
+~/.claude/telegram-orchestrator/scripts/teams-watch.sh register \
+  --session "$SESSION" \
+  --chat-id "<chatId_from_send_response>" \
+  --last-msg-time "<messageTime_from_send_response>" \
+  --original-msg "<the message you sent>" \
+  --timeout 24h
+```
+
+Then ensure the daemon is running:
+```bash
+~/.claude/telegram-orchestrator/scripts/teams-watch-daemon.sh start
+```
+
+Report: "Watch registered. I'll resume when a reply arrives (24h timeout)."
+
+#### `watch [chat_id]` — Register a Watch
+If no chat_id provided, use the last chat you interacted with in this session.
+```bash
+SESSION=$(tmux display-message -p '#S')
+~/.claude/telegram-orchestrator/scripts/teams-watch.sh register \
+  --session "$SESSION" \
+  --chat-id "<chat_id>" \
+  --last-msg-time "<current_iso_time>" \
+  --timeout 24h
+~/.claude/telegram-orchestrator/scripts/teams-watch-daemon.sh start
+```
+
+#### `unwatch` — Cancel Your Watch
+```bash
+SESSION=$(tmux display-message -p '#S')
+~/.claude/telegram-orchestrator/scripts/teams-watch.sh unregister --session "$SESSION"
+```
+
+#### `watches` — List All Active Watches
+```bash
+~/.claude/telegram-orchestrator/scripts/teams-watch.sh list
 ```
 
 ### Step 4: Display Results

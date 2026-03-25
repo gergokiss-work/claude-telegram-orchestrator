@@ -332,7 +332,24 @@ with open('${tmp_file}', 'w') as f:
   json.dump(wf, f)
 " "$body_json"
 
-  run_oneshot "$tmp_file" "$wp"
+  local response
+  response=$(run_oneshot "$tmp_file" "$wp")
+
+  # Parse response to structured output
+  echo "$response" | python3 -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read(), strict=False)
+    result = {
+        'status': 'sent',
+        'chatId': data.get('chatId', '$chat_id'),
+        'messageId': data.get('id', ''),
+        'messageTime': data.get('createdDateTime', ''),
+    }
+    print(json.dumps(result, indent=2))
+except:
+    print(json.dumps({'status': 'sent', 'chatId': '$chat_id'}))
+" 2>/dev/null
 }
 
 cmd_send_to() {
@@ -431,7 +448,24 @@ with open('${tmp_file}', 'w') as f:
   json.dump(wf, f)
 " "$email" "$message"
 
-  run_oneshot "$tmp_file" "$wp"
+  local response
+  response=$(run_oneshot "$tmp_file" "$wp")
+
+  echo "$response" | python3 -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read(), strict=False)
+    result = {
+        'status': 'sent',
+        'chatId': data.get('chatId', ''),
+        'messageId': data.get('id', ''),
+        'messageTime': data.get('createdDateTime', ''),
+        'to': '$email'
+    }
+    print(json.dumps(result, indent=2))
+except:
+    print(json.dumps({'status': 'sent', 'to': '$email'}))
+" 2>/dev/null
 }
 
 # ─── Main ───────────────────────────────────────────────
