@@ -1,0 +1,28 @@
+{
+  "embedding_model": "qwen3-embedding:0.6b",
+  "embedding_dimensions": 1024,
+  "summary_model": "qwen3:14b",
+  "ollama_url": "http://localhost:11434",
+  "poll_interval": 300,
+  "summary_interval_business": 3600,
+  "summary_interval_other": 14400,
+  "business_hours": {"start": 8, "end": 19, "timezone": "Europe/Budapest"},
+  "business_days": [0, 1, 2, 3, 4],
+  "message_retention_days": 90,
+  "self_user_id": "873ef3a0-041c-458f-8af5-c44e6db0dcaf",
+  "chat_tags": {
+    "19:2c34a15367544cf0abfc014eb6cec5a2@thread.v2": "work",
+    "19:08780f80d4a44d45aba313966796a0b7@thread.v2": "work:status-dev",
+    "19:1fe0668facea4860863da027697864af@thread.v2": "work:ncs-python",
+    "19:e617af4545bf498eb9be2f94376be7f4@thread.v2": "work:devops",
+    "19:f4d0fa91b1454af582df4386db0f21b3@thread.v2": "work:github-actions",
+    "19:9e04df79600648ca90ecd2eb7f3da2ab@thread.v2": "social:jokes"
+  },
+  "chat_blacklist": [],
+  "github_repos": [
+    "netlock-solutions/ncs-backend",
+    "netlock-solutions/ncs-frontend",
+    "netlock-solutions/ayacucho-certificate-liveness-ms",
+    "netlock-solutions/aws-n8n"
+  ]
+}
