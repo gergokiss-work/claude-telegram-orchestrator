@@ -1273,7 +1273,7 @@ while true; do
                     log "Reply routing detected: $target_session"
                 elif [[ "$reply_to_text" =~ \[claude-([0-9]+)\] ]]; then
                     # Legacy format - resolve to actual session
-                    local resolved=$(resolve_session "${BASH_REMATCH[1]}")
+                    resolved=$(resolve_session "${BASH_REMATCH[1]}")
                     if [[ -n "$resolved" ]]; then
                         target_session="$resolved"
                     else
@@ -1320,9 +1320,9 @@ while true; do
                     inject_input "$target_session" "$message_text" "true"
                 elif [[ "$message_text" =~ ^@claude-([0-9]+)[[:space:]]+(.*) ]]; then
                     # @claude-N routing: "@claude-3 yes approved" → claude-3
-                    local at_session_num="${BASH_REMATCH[1]}"
-                    local at_message="${BASH_REMATCH[2]}"
-                    local at_session=$(resolve_session "$at_session_num")
+                    at_session_num="${BASH_REMATCH[1]}"
+                    at_message="${BASH_REMATCH[2]}"
+                    at_session=$(resolve_session "$at_session_num")
                     if [[ -n "$at_session" ]]; then
                         log "@claude-$at_session_num routing to $at_session: $at_message"
                         # Signal refinement-loop that user replied
@@ -1334,9 +1334,9 @@ while true; do
                     fi
                 elif [[ "$message_text" =~ ^@([0-9]+)[[:space:]]+(.*) ]]; then
                     # @N shorthand routing: "@3 yes approved" → claude-3
-                    local at_session_num="${BASH_REMATCH[1]}"
-                    local at_message="${BASH_REMATCH[2]}"
-                    local at_session=$(resolve_session "$at_session_num")
+                    at_session_num="${BASH_REMATCH[1]}"
+                    at_message="${BASH_REMATCH[2]}"
+                    at_session=$(resolve_session "$at_session_num")
                     if [[ -n "$at_session" ]]; then
                         log "@$at_session_num routing to $at_session: $at_message"
                         # Signal refinement-loop that user replied
