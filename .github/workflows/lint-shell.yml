@@ -1,0 +1,45 @@
+name: lint-shell
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versions
+        run: |
+          bash --version | head -1
+          shellcheck --version | head -3
+
+      - name: bash -n (syntax check, blocking)
+        run: |
+          set -e
+          fail=0
+          while IFS= read -r f; do
+            if ! bash -n "$f"; then
+              echo "::error file=$f::bash -n failed"
+              fail=1
+            fi
+          done < <(git ls-files '*.sh')
+          exit $fail
+
+      - name: shellcheck (errors block, warnings informational)
+        run: |
+          mapfile -t files < <(git ls-files '*.sh')
+          echo "Linting ${#files[@]} shell files at severity=error"
+          shellcheck --severity=error --shell=bash --external-sources "${files[@]}"
+
+      - name: shellcheck (warnings — informational, never blocks)
+        continue-on-error: true
+        run: |
+          mapfile -t files < <(git ls-files '*.sh')
+          echo "Linting ${#files[@]} shell files at severity=warning (informational)"
+          shellcheck --severity=warning --shell=bash --external-sources "${files[@]}"
