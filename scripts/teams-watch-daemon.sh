@@ -297,25 +297,63 @@ if raw:
     return
   fi
 
-  # Move watch to completed
-  python3 -c "
-import json
-with open('$watch_file') as f:
-    w = json.load(f)
-w['status'] = 'triggered'
-w['triggeredAt'] = '$(date -u '+%Y-%m-%dT%H:%M:%SZ')'
-with open('$watch_file', 'w') as f:
-    json.dump(w, f, indent=2)
-"
-  mv "$watch_file" "$COMPLETED_DIR/$(basename "$watch_file" .json)-$(date +%s).json"
-  log "  Watch completed and moved for $session"
+  # Auto-re-register: roll lastMessageTime forward and keep watch active (DARK-7 §6.8)
+  # The watch's existing expiresAt still handles eventual cleanup.
+  local now_iso new_last_msg_time tmp_file events_file
+  now_iso=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  events_file="$HOME/.claude/orchestration/events.jsonl"
+  mkdir -p "$(dirname "$events_file")"
 
-  # Notify via Telegram
+  new_last_msg_time=$(python3 -c "
+import json, sys
+raw = json.loads(sys.argv[1])
+times = [m.get('time','') for m in raw if m.get('time')]
+print(max(times) if times else sys.argv[2])
+" "$new_replies" "$now_iso" 2>/dev/null || echo "$now_iso")
+
+  tmp_file="${watch_file}.tmp.$$"
+  if python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    w = json.load(f)
+w['lastMessageTime'] = sys.argv[2]
+w['lastFiredAt'] = sys.argv[3]
+w['fireCount'] = int(w.get('fireCount', 0)) + 1
+with open(sys.argv[4], 'w') as f:
+    json.dump(w, f, indent=2)
+" "$watch_file" "$new_last_msg_time" "$now_iso" "$tmp_file" 2>>"$LOG_FILE"; then
+    mv "$tmp_file" "$watch_file"
+    log "  Watch rolled (lastMessageTime=$new_last_msg_time), staying active for $session"
+  else
+    rm -f "$tmp_file"
+    log "  ERROR: failed to roll watch for $session, falling back to move-to-completed"
+    mv "$watch_file" "$COMPLETED_DIR/$(basename "$watch_file" .json)-$(date +%s).json"
+  fi
+
+  # Append watch.rolled event
+  python3 -c "
+import json, sys
+evt = {
+    'ts': sys.argv[1],
+    'type': 'watch.rolled',
+    'actor': 'teams-watch-daemon',
+    'session': sys.argv[2],
+    'chatId': sys.argv[3],
+    'replyCount': int(sys.argv[4]),
+    'newLastMessageTime': sys.argv[5],
+    'fromName': sys.argv[6],
+}
+with open(sys.argv[7], 'a') as f:
+    f.write(json.dumps(evt, ensure_ascii=False) + '\n')
+" "$now_iso" "$session" "$chat_id" "$reply_count" "$new_last_msg_time" "$first_from" "$events_file" 2>>"$LOG_FILE" \
+    || log "  WARN: failed to append watch.rolled event"
+
+  # Notify via Telegram (watch stays active for follow-ups)
   if [[ -x "$TELEGRAM_SEND" ]]; then
     "$TELEGRAM_SEND" --session "teams-watch" "🔔 <b>Teams Reply → Agent Resumed</b>
 
 <code>$session</code> received a Teams reply from <b>$first_from</b>.
-Reply injected, agent should resume working." 2>/dev/null || true
+Reply injected, watch remains active for follow-ups." 2>/dev/null || true
   fi
 }
 
