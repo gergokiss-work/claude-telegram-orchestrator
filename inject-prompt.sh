@@ -70,16 +70,19 @@ fi
 tmux send-keys -t "$SESSION" C-u
 sleep "$CLEAR_DELAY"
 
-# Inject via buffer (handles multiline properly)
+# Inject via buffer (handles multiline properly).
+# Buffer name must be unique per invocation — parallel calls would otherwise
+# race on a fixed name and stomp each other's payloads.
+INJECT_BUF="inject_buf_$$_$RANDOM"
 tmpfile=$(mktemp)
 printf '%s' "$PROMPT" > "$tmpfile"
-tmux load-buffer -b inject_buf "$tmpfile"
+tmux load-buffer -b "$INJECT_BUF" "$tmpfile"
 
 # Small delay after loading buffer to ensure tmux is ready
 sleep "$BUFFER_LOAD_DELAY"
 
-tmux paste-buffer -b inject_buf -t "$SESSION"
-tmux delete-buffer -b inject_buf 2>/dev/null
+tmux paste-buffer -b "$INJECT_BUF" -t "$SESSION"
+tmux delete-buffer -b "$INJECT_BUF" 2>/dev/null
 rm -f "$tmpfile"
 
 # Wait for paste to fully complete
@@ -91,7 +94,7 @@ sleep 0.2
 tmux wait-for -U "inject_sync_$$" 2>/dev/null || true
 
 # Send Enter
-tmux send-keys -t "$SESSION" Enter
+tmux send-keys -t "$SESSION" C-m
 
 # Wait and verify
 sleep "$ENTER_DELAY"
@@ -101,7 +104,7 @@ retry_enter() {
     local attempt=$1
     echo "Enter attempt $attempt..."
     sleep "$RETRY_DELAY"
-    tmux send-keys -t "$SESSION" Enter
+    tmux send-keys -t "$SESSION" C-m
     sleep "$ENTER_DELAY"
 }
 
